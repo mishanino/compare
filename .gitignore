@@ -16,6 +16,9 @@ runs/
 *.log
 npm-debug.log*
 
+# Design files (kept locally only)
+design/
+
 # Test coverage
 coverage/
 
