@@ -1,0 +1,12 @@
+services:
+  app:
+    build: .
+    image: room-change-evidence
+    ports:
+      - "3000:3000"
+    # API key, model id and prices. Copy .env.example to .env first.
+    env_file: .env
+    volumes:
+      # Run measurements (runs/log.jsonl) survive container restarts.
+      - ./runs:/app/runs
+    restart: unless-stopped

@@ -1,0 +1,16 @@
+# Keep secrets, local state and large test data out of the build context.
+.env*
+!.env.example
+node_modules
+.next
+runs
+testset
+design
+coverage
+.git
+.vscode
+.idea
+*.log
+npm-debug.log*
+Dockerfile
+docker-compose.yml
