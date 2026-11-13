@@ -69,3 +69,31 @@ export async function cropEvidence(
 }
 
 export const toDataUrl = (jpeg: Buffer) => `data:image/jpeg;base64,${jpeg.toString("base64")}`;
+
+/** Limits for comparing an object's box with the box of its empty place. */
+export const EMPTY_REGION_LIMITS = { maxAreaRatio: 4, maxAspectRatio: 3 };
+
+/**
+ * For added / removed: the empty-place box must be roughly the size and shape of
+ * the object's box, or the crop pair does not show the same place. Sizes are
+ * measured in pixels relative to each photo's diagonal, so photos of different
+ * resolution or orientation compare fairly. Returns a reason when they do not match.
+ */
+export function emptyRegionMismatch(
+  object: { box: Box; width: number; height: number },
+  empty: { box: Box; width: number; height: number },
+): string | null {
+  const size = (r: typeof object) => {
+    const diag = Math.hypot(r.width, r.height);
+    return { w: (r.box.w * r.width) / diag, h: (r.box.h * r.height) / diag };
+  };
+  const a = size(object);
+  const b = size(empty);
+  if (a.w <= 0 || a.h <= 0 || b.w <= 0 || b.h <= 0) return "a region has no area";
+  const ratio = (x: number, y: number) => Math.max(x / y, y / x);
+  const area = ratio(a.w * a.h, b.w * b.h);
+  const aspect = ratio(a.w / a.h, b.w / b.h);
+  if (area > EMPTY_REGION_LIMITS.maxAreaRatio) return `the empty-place region is ${area.toFixed(1)}x off in size`;
+  if (aspect > EMPTY_REGION_LIMITS.maxAspectRatio) return `the empty-place region has a different shape (${aspect.toFixed(1)}x)`;
+  return null;
+}

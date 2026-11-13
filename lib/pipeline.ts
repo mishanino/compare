@@ -3,11 +3,12 @@
  * -> evidence crops -> verify (1 model call on the claimed changes) -> report.
  */
 import { randomUUID } from "node:crypto";
-import { cropEvidence, cropRegion, toDataUrl, type Crop, type CropPair } from "./evidence";
+import { cropEvidence, cropRegion, emptyRegionMismatch, toDataUrl, type Crop, type CropPair } from "./evidence";
 import { preprocessImage, PreprocessError, type PreprocessedImage, type SourceFormat } from "./preprocess";
+import { measureQuality, qualityProblem } from "./quality";
 import { appendRunLog, toLoggedCall, totalCost, type LoggedCall, type Prices, type RunLogEntry } from "./runlog";
 import type { PhotoSet, UploadedPhoto } from "./upload";
-import { applyVerification, computeReport, type ObjectVerdict, type Report, type VerificationResult } from "./verdict";
+import { applyVerification, computeReport, declineForPhotos, type ObjectVerdict, type Report, type VerificationResult } from "./verdict";
 import { VisionSchemaError, type VisionProvider } from "./vision/provider";
 import type { Claim, ClaimKind } from "./vision/verification";
 
@@ -27,7 +28,8 @@ export interface CompareResult {
    */
   crops: Record<string, { before?: string; after?: string }>;
   photos: Record<PhotoSet, PhotoInfo[]>;
-  run: { id: string; model_id: string; wall_ms: number; cost_usd: number | null };
+  /** model_id is null when the run was declined before any model call. */
+  run: { id: string; model_id: string | null; wall_ms: number; cost_usd: number | null };
 }
 
 /** User-facing progress stages: preprocess, observe, then verdict + crops + verify. */
@@ -80,6 +82,17 @@ async function preprocessAll(photos: Record<PhotoSet, UploadedPhoto[]>) {
   return { before, after };
 }
 
+async function photoProblems(images: { before: PreprocessedImage[]; after: PreprocessedImage[] }): Promise<string[]> {
+  const problems: string[] = [];
+  for (const set of ["before", "after"] as const) {
+    for (const [i, img] of images[set].entries()) {
+      const p = qualityProblem(await measureQuality(img.model), `${set === "before" ? "BEFORE" : "AFTER"} photo ${i + 1}`);
+      if (p) problems.push(p);
+    }
+  }
+  return problems;
+}
+
 function photoInfo(p: UploadedPhoto, img: PreprocessedImage): PhotoInfo {
   return {
     photo: p.photo,
@@ -125,6 +138,23 @@ export async function runCompare(photos: Record<PhotoSet, UploadedPhoto[]>, deps
   try {
     deps.onStage?.("prepare");
     const images = await timed("preprocess", () => preprocessAll(photos));
+    const info = {
+      before: photos.before.map((ph, i) => photoInfo(ph, images.before[i])),
+      after: photos.after.map((ph, i) => photoInfo(ph, images.after[i])),
+    };
+
+    // Unusable photos are declined in code, before paying for a model call.
+    const problems = await timed("quality", () => photoProblems(images));
+    if (problems.length > 0) {
+      report = declineForPhotos(problems);
+      return {
+        report,
+        crops: {},
+        photos: info,
+        run: { id: runId, model_id: null, wall_ms: Date.now() - started, cost_usd: totalCost(calls, deps.prices) },
+      };
+    }
+
     provider = await deps.getProvider();
     const p = provider;
 
@@ -154,9 +184,24 @@ export async function runCompare(photos: Record<PhotoSet, UploadedPhoto[]>, deps
       }
     });
 
+    // Added / removed: the empty-place box must match the object's box, or the
+    // pair does not show the same place and the claim cannot be confirmed.
+    const mismatched = new Map<string, string>();
+    for (const v of allVerdicts(report)) {
+      if ((v.verdict !== "added" && v.verdict !== "removed") || !v.evidence) continue;
+      const objectSide = v.verdict === "removed" ? "before" : "after";
+      const emptySide = v.verdict === "removed" ? "after" : "before";
+      const side = (s: PhotoSet) => {
+        const img = full[s][v.evidence![s].photo - 1];
+        return { box: v.evidence![s].box, width: img.width, height: img.height };
+      };
+      const why = emptyRegionMismatch(side(objectSide), side(emptySide));
+      if (why) mismatched.set(v.object_id, why);
+    }
+
     const objects = new Map(observed.observation.objects.map((o) => [o.id, o]));
     const claims: Claim[] = allVerdicts(report)
-      .filter((v) => CLAIM_KINDS.includes(v.verdict as ClaimKind) && pairs.has(v.object_id))
+      .filter((v) => CLAIM_KINDS.includes(v.verdict as ClaimKind) && pairs.has(v.object_id) && !mismatched.has(v.object_id))
       .map((v) => ({
         id: v.object_id,
         kind: v.verdict as ClaimKind,
@@ -167,11 +212,15 @@ export async function runCompare(photos: Record<PhotoSet, UploadedPhoto[]>, deps
       }));
 
     // A change is only reported once the verify step confirms it. A claim without
-    // crops, or a failed verify call, cannot be confirmed, so it becomes uncertain.
+    // crops, with mismatched regions, or a failed verify call, cannot be confirmed,
+    // so it becomes uncertain.
     const results: VerificationResult[] = await timed("verify", async () => {
-      const unverifiable = allVerdicts(report!)
-        .filter((v) => CLAIM_KINDS.includes(v.verdict as ClaimKind) && !pairs.has(v.object_id))
-        .map((v) => ({ object_id: v.object_id, confirmed: false, checked: false, note: "no evidence crops were available" }));
+      const unverifiable: VerificationResult[] = [
+        ...allVerdicts(report!)
+          .filter((v) => CLAIM_KINDS.includes(v.verdict as ClaimKind) && !pairs.has(v.object_id))
+          .map((v) => ({ object_id: v.object_id, confirmed: false, checked: false, note: "no evidence crops were available" })),
+        ...[...mismatched].map(([object_id, note]) => ({ object_id, confirmed: false, note })),
+      ];
       if (claims.length === 0) return unverifiable;
       try {
         const r = await p.verify(claims);
@@ -203,10 +252,7 @@ export async function runCompare(photos: Record<PhotoSet, UploadedPhoto[]>, deps
     return {
       report,
       crops,
-      photos: {
-        before: photos.before.map((ph, i) => photoInfo(ph, images.before[i])),
-        after: photos.after.map((ph, i) => photoInfo(ph, images.after[i])),
-      },
+      photos: info,
       run: { id: runId, model_id: provider.modelId, wall_ms: Date.now() - started, cost_usd: totalCost(calls, deps.prices) },
     };
   } catch (err) {

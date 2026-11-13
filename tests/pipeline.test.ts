@@ -1,6 +1,7 @@
 import { mkdtemp, readFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import sharp from "sharp";
 import { beforeEach, describe, expect, it } from "vitest";
 import { runCompare, VisionCallError } from "@/lib/pipeline";
 import { PreprocessError } from "@/lib/preprocess";
@@ -8,7 +9,7 @@ import type { RunLogEntry } from "@/lib/runlog";
 import type { UploadedPhoto } from "@/lib/upload";
 import { VisionSchemaError, type VisionProvider } from "@/lib/vision/provider";
 import { FakeProvider, sceneObservation, usage } from "./fake-provider";
-import { makeImage } from "./helpers";
+import { makeImage, makeTexturedImage } from "./helpers";
 
 const prices = { inputPerMTokUsd: 1, outputPerMTokUsd: 10 };
 let logPath: string;
@@ -18,7 +19,7 @@ beforeEach(async () => {
 });
 
 async function photos() {
-  const bytes = await makeImage(400, 300);
+  const bytes = await makeTexturedImage(400, 300);
   const p = (set: "before" | "after"): UploadedPhoto => ({ set, photo: 1, name: `${set}.jpg`, bytes });
   return { before: [p("before")], after: [p("after")] };
 }
@@ -133,7 +134,7 @@ describe("runCompare", () => {
       { stage: "observe", model_id: "fake-model", input_tokens: 10_000, output_tokens: 2_000, retries: 0, wall_ms: 1 },
       { stage: "verify", model_id: "fake-model", input_tokens: 1_000, output_tokens: 500, retries: 0, wall_ms: 1 },
     ]);
-    expect(Object.keys(log.stage_ms)).toEqual(["preprocess", "observe", "verdict", "evidence", "verify"]);
+    expect(Object.keys(log.stage_ms)).toEqual(["preprocess", "quality", "observe", "verdict", "evidence", "verify"]);
     expect(log.cost_usd).toBeCloseTo(0.036);
   });
 
@@ -170,5 +171,43 @@ describe("readableError", () => {
     const body = JSON.stringify({ error: { code: 503, message: "Model is overloaded.", status: "UNAVAILABLE" } });
     expect(readableError(new Error(body))).toBe("Model is overloaded. (503)");
     expect(readableError(new Error("plain"))).toBe("plain");
+  });
+});
+
+describe("runCompare quality gate and region check", () => {
+  it("declines unusable photos in code without creating the provider", async () => {
+    let created = false;
+    const p = await photos();
+    p.after[0].bytes = await makeImage(400, 300); // flat colour: no detail at all
+    const dark = await sharp(await makeTexturedImage(400, 300)).modulate({ brightness: 0.05 }).jpeg().toBuffer();
+    p.before[0].bytes = dark;
+    const r = await runCompare(p, {
+      getProvider: async () => ((created = true), new FakeProvider(sceneObservation())),
+      prices,
+      logPath,
+    });
+    expect(created).toBe(false);
+    expect(r.report.status).toBe("declined");
+    if (r.report.status !== "declined") return;
+    expect(r.report.reasons).toContain("Some photos are not usable.");
+    expect(r.report.reasons.some((s) => s.startsWith("BEFORE photo 1 is too dark"))).toBe(true);
+    expect(r.report.reasons).toContain("AFTER photo 1 is too blurred to read.");
+    expect(r.run.model_id).toBeNull();
+    const log = await lastLog();
+    expect(log).toMatchObject({ outcome: "declined", calls: [], cost_usd: 0 });
+  });
+
+  it("downgrades a removal whose empty-place box does not match the object", async () => {
+    const obs = sceneObservation();
+    const phone = obs.objects.find((o) => o.id === "o2")!;
+    // Visible box 0.2 x 0.2, empty box a thin 0.2 x 0.02 strip.
+    phone.sightings[1].box = { x: 0.2, y: 0.3, w: 0.2, h: 0.02 };
+    const fake = new FakeProvider(obs);
+    const r = await run(fake);
+    expect(fake.verifyCalls[0].map((c) => c.id)).toEqual(["o1"]);
+    if (r.report.status !== "ok") throw new Error("expected ok");
+    expect(r.report.uncertain.map((v) => v.object_id)).toEqual(["o2"]);
+    expect(r.report.uncertain[0].reason).toMatch(/empty-place region/);
+    expect(r.crops.o2.before).toBeDefined();
   });
 });

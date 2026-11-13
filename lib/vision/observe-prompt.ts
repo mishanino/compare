@@ -17,7 +17,7 @@ INPUT
 
 SCENE CHECK
 - same_scene: set to false if the BEFORE and AFTER sets show different places (different room, different desk, different furniture layout that cannot be the same spot). Small rearrangements of movable objects do NOT make it a different scene.
-- usable: set to false if the photos are too dark, too blurred, too overexposed or too cropped to locate objects reliably.
+- usable: set to false if any photo is too dark, too blurred, too overexposed or too cropped to locate objects reliably. Judge the photo as it is: if you have to guess shapes in a very dark or blurred photo, it is not usable, even if you can still make out some objects. Name the photo and the problem in issues.
 - issues: short, specific reasons for any problem (for example "AFTER photo 2 is heavily motion-blurred"). Empty if none.
 - lighting_note: one sentence on lighting differences between sets. This is for context only; it is never a change.
 - viewpoint_note: one sentence on how camera positions differ between photos.

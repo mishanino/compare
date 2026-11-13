@@ -50,7 +50,11 @@ export function formatCost(usd: number | null): string {
 }
 
 export function footerParts(result: CompareResult): string[] {
-  return [`Processed in ${(result.run.wall_ms / 1000).toFixed(1)} s`, formatCost(result.run.cost_usd), result.run.model_id];
+  return [
+    `Processed in ${(result.run.wall_ms / 1000).toFixed(1)} s`,
+    formatCost(result.run.cost_usd),
+    result.run.model_id ?? "no model call",
+  ];
 }
 
 export function errorTag(code: string, status: number): string {

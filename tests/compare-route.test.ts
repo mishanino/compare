@@ -4,7 +4,7 @@ import path from "node:path";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { CompareFailure, readCompareResponse } from "@/lib/compare-events";
 import { FakeProvider, sceneObservation } from "./fake-provider";
-import { makeImage } from "./helpers";
+import { makeImage, makeTexturedImage } from "./helpers";
 
 const provider = vi.hoisted(() => ({ current: null as unknown }));
 vi.mock("@/lib/vision/provider", async (importOriginal) => {
@@ -46,8 +46,8 @@ beforeEach(() => {
 describe("POST /api/compare", () => {
   it("streams the stages, then the report with crops and photo info", async () => {
     const res = await post([
-      ["before", blob(await makeImage(4000, 3000)), "b1.jpg"],
-      ["after", blob(await makeImage(640, 480, { format: "png" })), "a1.png"],
+      ["before", blob(await makeTexturedImage(2048, 1536)), "b1.jpg"],
+      ["after", blob(await makeTexturedImage(640, 480, { format: "png" })), "a1.png"],
     ]);
     expect(res.status).toBe(200);
     expect(res.headers.get("content-type")).toContain("application/x-ndjson");
@@ -61,7 +61,7 @@ describe("POST /api/compare", () => {
       photo: 1,
       name: "b1.jpg",
       sourceFormat: "jpeg",
-      full: { width: 4000, height: 3000 },
+      full: { width: 2048, height: 1536 },
       model: { width: 1536, height: 1152 },
     });
     expect(body.run).toMatchObject({ model_id: "fake-model" });
@@ -70,7 +70,7 @@ describe("POST /api/compare", () => {
   it("streams a bad_photo error with a readable message for an unreadable photo", async () => {
     const res = await post([
       ["before", new Blob(["not an image"]), "x.jpg"],
-      ["after", blob(await makeImage(100, 100)), "a.jpg"],
+      ["after", blob(await makeTexturedImage(100, 100)), "a.jpg"],
     ]);
     const err = await failure(res);
     expect(err).toBeInstanceOf(CompareFailure);
@@ -92,8 +92,8 @@ describe("POST /api/compare", () => {
   it("streams a config error without leaking details", async () => {
     provider.current = null;
     const res = await post([
-      ["before", blob(await makeImage(100, 100)), "b.jpg"],
-      ["after", blob(await makeImage(100, 100)), "a.jpg"],
+      ["before", blob(await makeTexturedImage(100, 100)), "b.jpg"],
+      ["after", blob(await makeTexturedImage(100, 100)), "a.jpg"],
     ]);
     expect(await failure(res)).toMatchObject({
       code: "provider_not_configured",
@@ -109,8 +109,8 @@ describe("POST /api/compare", () => {
     };
     provider.current = fake;
     const res = await post([
-      ["before", blob(await makeImage(100, 100)), "b.jpg"],
-      ["after", blob(await makeImage(100, 100)), "a.jpg"],
+      ["before", blob(await makeTexturedImage(100, 100)), "b.jpg"],
+      ["after", blob(await makeTexturedImage(100, 100)), "a.jpg"],
     ]);
     const err = await failure(res);
     expect(err).toMatchObject({ code: "vision_unavailable", status: 502 });

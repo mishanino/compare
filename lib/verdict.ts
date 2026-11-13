@@ -240,6 +240,15 @@ function group(verdicts: ObjectVerdict[], notes: SceneNotes): Report {
   };
 }
 
+/** Declines the whole report because of photo problems found in code, before any model call. */
+export function declineForPhotos(problems: string[]): Report {
+  return {
+    status: "declined",
+    reasons: ["Some photos are not usable.", ...problems],
+    notes: { lighting_note: "", viewpoint_note: "" },
+  };
+}
+
 export function computeReport(obs: Observation): Report {
   const notes: SceneNotes = { lighting_note: obs.scene.lighting_note, viewpoint_note: obs.scene.viewpoint_note };
   if (!obs.scene.same_scene || !obs.scene.usable) {
