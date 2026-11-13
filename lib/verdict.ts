@@ -234,6 +234,8 @@ export interface VerificationResult {
   confirmed: boolean;
   /** Why the verify step did not confirm the change. */
   note?: string;
+  /** False when the check could not run at all (no crops, failed call). Defaults to true. */
+  checked?: boolean;
 }
 
 /** Verify step said "not confirmed" -> downgrade that change to uncertain. */
@@ -248,7 +250,10 @@ export function applyVerification(report: Report, results: VerificationResult[])
     return {
       ...v,
       verdict: "uncertain",
-      reason: `Looked ${v.verdict}, but a closer check of the crops did not confirm it${r.note ? `: ${r.note}` : "."}`,
+      reason:
+        r.checked === false
+          ? `Looked ${v.verdict}, but this could not be double-checked${r.note ? ` (${r.note})` : ""}, so it is not reported as a change.`
+          : `Looked ${v.verdict}, but a closer check of the crops did not confirm it${r.note ? `: ${r.note}` : "."}`,
       requested_angle: `Take a closer AFTER photo of the ${v.label}${ref}.`,
     };
   });

@@ -187,3 +187,55 @@ describe("buildObservePrompt", () => {
     }
   });
 });
+
+describe("GeminiProvider.verify", () => {
+  const claim = (id: string, kind: "moved" | "added" | "removed") => ({
+    id,
+    kind,
+    label: `thing ${id}`,
+    description: "red",
+    before: Buffer.from("b"),
+    after: Buffer.from("a"),
+  });
+  const answer = (results: unknown) => ({ text: JSON.stringify({ results }), usageMetadata: { promptTokenCount: 300, candidatesTokenCount: 40 } });
+
+  it("sends a header and both crops per claim and returns the results", async () => {
+    const generate = vi.fn<GenerateFn>().mockResolvedValue(
+      answer([
+        { id: "o1", confirmed: true, reason: "same mug" },
+        { id: "o2", confirmed: false, reason: "only a shadow" },
+      ]),
+    );
+    const r = await new GeminiProvider("m", generate).verify([claim("o1", "moved"), claim("o2", "removed")]);
+    expect(r.results.map((x) => x.confirmed)).toEqual([true, false]);
+    expect(r.usage).toMatchObject({ inputTokens: 300, outputTokens: 40, retries: 0 });
+    const params = generate.mock.calls[0][0];
+    const parts = (params.contents as any)[0].parts;
+    expect(parts).toHaveLength(10);
+    expect(parts[0].text).toContain("Claim o1");
+    expect(parts[0].text).toContain("MOVED");
+    expect(parts[2].inlineData.mimeType).toBe("image/jpeg");
+    expect(String(params.config?.systemInstruction)).toContain("lighting, shadow");
+    expect((params.config?.responseJsonSchema as any).properties.results.items.required).toEqual(["id", "confirmed", "reason"]);
+  });
+
+  it("retries once when a claim is missing from the answer", async () => {
+    const generate = vi
+      .fn<GenerateFn>()
+      .mockResolvedValueOnce(answer([{ id: "o1", confirmed: true, reason: "ok" }]))
+      .mockResolvedValueOnce(answer([{ id: "o1", confirmed: true, reason: "ok" }, { id: "o2", confirmed: true, reason: "ok" }]));
+    const r = await new GeminiProvider("m", generate).verify([claim("o1", "moved"), claim("o2", "added")]);
+    expect(r.usage.retries).toBe(1);
+    const retryParts = (generate.mock.calls[1][0].contents as any)[0].parts;
+    expect(retryParts.at(-1).text).toContain('no answer for claim "o2"');
+  });
+
+  it("throws VisionSchemaError after two bad answers and makes no call for zero claims", async () => {
+    const generate = vi.fn<GenerateFn>().mockResolvedValue(answer([{ id: "zzz", confirmed: true, reason: "?" }]));
+    await expect(new GeminiProvider("m", generate).verify([claim("o1", "moved")])).rejects.toThrow(VisionSchemaError);
+    expect(generate).toHaveBeenCalledTimes(2);
+    const none = vi.fn<GenerateFn>();
+    expect((await new GeminiProvider("m", none).verify([])).results).toEqual([]);
+    expect(none).not.toHaveBeenCalled();
+  });
+});

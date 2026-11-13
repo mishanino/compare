@@ -2,19 +2,66 @@
 
 import { useState } from "react";
 import { DropZone, type Picked } from "@/components/DropZone";
+import type { CompareResult } from "@/lib/pipeline";
+import type { ObjectVerdict } from "@/lib/verdict";
 
-interface Dims {
-  width: number;
-  height: number;
+type CompareResponse = CompareResult | { error: string };
+
+const SECTIONS = [
+  { key: "changes", title: "Changes" },
+  { key: "uncertain", title: "Uncertain" },
+  { key: "not_verifiable", title: "Not verifiable" },
+  { key: "unchanged", title: "Unchanged" },
+] as const;
+
+function VerdictItem({ v, crops }: { v: ObjectVerdict; crops: CompareResult["crops"] }) {
+  const c = crops[v.object_id];
+  return (
+    <li className="verdict">
+      <p>
+        <strong>{v.label}</strong>: {v.verdict.replace("_", " ")}. {v.reason}
+      </p>
+      {v.requested_angle && <p className="angle">Please add: {v.requested_angle}</p>}
+      {c && v.evidence && (
+        <div className="crops">
+          <figure>
+            <img src={c.before} alt={`${v.label}, BEFORE photo ${v.evidence.before.photo}`} />
+            <figcaption>Before, photo {v.evidence.before.photo}</figcaption>
+          </figure>
+          <figure>
+            <img src={c.after} alt={`${v.label}, AFTER photo ${v.evidence.after.photo}`} />
+            <figcaption>After, photo {v.evidence.after.photo}</figcaption>
+          </figure>
+        </div>
+      )}
+    </li>
+  );
 }
-interface PhotoInfo {
-  photo: number;
-  name: string;
-  sourceFormat: string;
-  full: Dims;
-  model: Dims;
+
+function ReportView({ result }: { result: CompareResult }) {
+  const { report } = result;
+  if (report.status === "declined") {
+    return (
+      <div className="report">
+        <h2>No conclusion</h2>
+        <ul>{report.reasons.map((r) => <li key={r}>{r}</li>)}</ul>
+      </div>
+    );
+  }
+  return (
+    <div className="report">
+      {report.changes.length === 0 && <p>No supported changes found.</p>}
+      {SECTIONS.map(({ key, title }) =>
+        report[key].length > 0 ? (
+          <section key={key}>
+            <h2>{title}</h2>
+            <ul>{report[key].map((v) => <VerdictItem key={v.object_id} v={v} crops={result.crops} />)}</ul>
+          </section>
+        ) : null,
+      )}
+    </div>
+  );
 }
-type CompareResponse = { before: PhotoInfo[]; after: PhotoInfo[] } | { error: string };
 
 export default function UploadPage() {
   const [before, setBefore] = useState<Picked[]>([]);
@@ -52,27 +99,11 @@ export default function UploadPage() {
       </div>
 
       <button type="button" className="compare" disabled={!ready} onClick={compare}>
-        {busy ? "Processing…" : "Compare"}
+        {busy ? "Processing… (this can take a minute or two)" : "Compare"}
       </button>
 
       {result && "error" in result && <p className="error" role="alert">{result.error}</p>}
-      {result && !("error" in result) && (
-        <div className="result">
-          {(["before", "after"] as const).map((set) => (
-            <div key={set}>
-              <h3>{set === "before" ? "Before" : "After"}</h3>
-              <ul>
-                {result[set].map((p) => (
-                  <li key={p.photo}>
-                    Photo {p.photo} ({p.sourceFormat}): {p.full.width}×{p.full.height}, model copy{" "}
-                    {p.model.width}×{p.model.height}
-                  </li>
-                ))}
-              </ul>
-            </div>
-          ))}
-        </div>
-      )}
+      {result && !("error" in result) && <ReportView result={result} />}
     </main>
   );
 }

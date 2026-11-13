@@ -1,4 +1,5 @@
 import type { Observation } from "./observation";
+import type { Claim, ClaimCheck } from "./verification";
 
 /** One preprocessed image as sent to the model (EXIF-corrected JPEG). */
 export interface ModelImage {
@@ -27,11 +28,21 @@ export interface ObserveResult {
   usage: CallUsage;
 }
 
-/** A vision model behind a fixed interface. It only observes; it never decides verdicts. */
+export interface VerifyResult {
+  results: ClaimCheck[];
+  usage: CallUsage;
+}
+
+/**
+ * A vision model behind a fixed interface. It only observes and checks crops;
+ * it never decides verdicts.
+ */
 export interface VisionProvider {
   readonly name: string;
   readonly modelId: string;
   observe(input: ObserveInput): Promise<ObserveResult>;
+  /** One call for all claims. Must return exactly one result per claim id. */
+  verify(claims: Claim[]): Promise<VerifyResult>;
 }
 
 /** Raised when the model output fails validation after the allowed retry. */

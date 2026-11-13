@@ -1,26 +1,13 @@
 import { NextResponse } from "next/server";
-import { preprocessImage, PreprocessError } from "@/lib/preprocess";
-import { readCompareForm, UploadError, type UploadedPhoto } from "@/lib/upload";
+import { runCompare, VisionCallError } from "@/lib/pipeline";
+import { PreprocessError } from "@/lib/preprocess";
+import { pricesFromEnv } from "@/lib/runlog";
+import { readCompareForm, UploadError } from "@/lib/upload";
+import { createVisionProvider, VisionConfigError } from "@/lib/vision/provider";
 
 export const runtime = "nodejs";
-
-async function describe(p: UploadedPhoto) {
-  try {
-    const img = await preprocessImage(p.bytes);
-    return {
-      photo: p.photo,
-      name: p.name,
-      sourceFormat: img.sourceFormat,
-      full: { width: img.full.width, height: img.full.height },
-      model: { width: img.model.width, height: img.model.height },
-    };
-  } catch (err) {
-    if (err instanceof PreprocessError) {
-      throw new PreprocessError(`${p.set.toUpperCase()} photo ${p.photo} (${p.name}): ${err.message}`);
-    }
-    throw err;
-  }
-}
+// Two vision calls can take a couple of minutes on large photo sets.
+export const maxDuration = 300;
 
 export async function POST(request: Request) {
   try {
@@ -31,14 +18,19 @@ export async function POST(request: Request) {
       throw new UploadError("Expected a multipart/form-data upload.");
     }
     const photos = await readCompareForm(form);
-    const [before, after] = await Promise.all([
-      Promise.all(photos.before.map(describe)),
-      Promise.all(photos.after.map(describe)),
-    ]);
-    return NextResponse.json({ before, after });
+    const result = await runCompare(photos, { getProvider: () => createVisionProvider(), prices: pricesFromEnv() });
+    return NextResponse.json(result);
   } catch (err) {
     if (err instanceof UploadError || err instanceof PreprocessError) {
       return NextResponse.json({ error: err.message }, { status: 400 });
+    }
+    if (err instanceof VisionConfigError) {
+      console.error(err);
+      return NextResponse.json({ error: "The vision provider is not configured on the server." }, { status: 500 });
+    }
+    if (err instanceof VisionCallError) {
+      console.error(err);
+      return NextResponse.json({ error: err.message }, { status: 502 });
     }
     console.error(err);
     return NextResponse.json({ error: "Internal error while processing photos." }, { status: 500 });
