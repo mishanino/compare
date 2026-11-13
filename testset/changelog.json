@@ -1,0 +1,232 @@
+{
+  "_status": "DRAFT written from a visual reading of the photos, before any model run. Owner must verify every line against what was physically done, then rename to changelog.json and commit BEFORE the first run.",
+  "_vocabulary": ["moved", "added", "removed", "unchanged", "not_verifiable", "uncertain", "decline"],
+  "_excluded": {
+    "20261113_122710.jpg": "7 objects on a different layout, over the 5-object limit. Not used for scoring. Optional stress case only."
+  },
+  "scenes": {
+    "desk": "Dark brown desk, 5 objects: 14 (pink), headphones, tape, scissors, cup. Dev set, free to tune on.",
+    "red_mat": "Red yoga mat, 5 objects: gray-green cube, lime cube with sticker, 17, 10, multitool. HOLDOUT, do not tune prompts on it."
+  },
+  "states": {
+    "A1": {
+      "scene": "desk",
+      "light": "neutral daylight",
+      "layout": "14 top-left, headphones top, tape bottom-left, scissors bottom-centre, cup bottom-right",
+      "files": ["20261113_124227.jpg", "20261113_124231.jpg", "20261113_124236.jpg"],
+      "views": "top-down, slight tilt, oblique"
+    },
+    "A2": {
+      "scene": "desk",
+      "light": "warm light, hard shadows (large tape shadow in 124310)",
+      "layout": "same as A1",
+      "files": ["20261113_124301.jpg", "20261113_124303.jpg", "20261113_124310.jpg"],
+      "notes": "cup is close to the right frame edge in 124303"
+    },
+    "B": {
+      "scene": "desk",
+      "light": "neutral",
+      "layout": "A1 but cup moved to centre and scissors moved to the right",
+      "files": ["20261113_124323.jpg", "20261113_124324.jpg", "20261113_124327.jpg"]
+    },
+    "D": {
+      "scene": "desk",
+      "light": "neutral",
+      "layout": "A1 but 14 moved next to the left earcup of the headphones, only a pink fragment visible",
+      "files": ["20261113_124335.jpg", "20261113_124337.jpg", "20261113_124340.jpg"]
+    },
+    "C": {
+      "scene": "desk",
+      "light": "hard light, large tape shadow",
+      "layout": "B plus 14 next to the left earcup (partly hidden)",
+      "files": ["20261113_124351.jpg", "20261113_124353.jpg", "20261113_124356.jpg"],
+      "notes": "124356 shows the pink fragment best"
+    },
+    "H": {
+      "scene": "desk",
+      "light": "darker, cooler",
+      "layout": "A1 layout plus a tall book standing on its edge in front of the cup",
+      "files": ["20261113_144531.jpg", "20261113_144541.jpg"],
+      "views": "144531 top-down (cup visible above the book), 144541 low front view (cup hidden behind the book)",
+      "owner_verify": "In 144531 the cup looks a little closer to the scissors than in A1. Confirm whether it was touched."
+    },
+    "E": {
+      "scene": "desk",
+      "light": "neutral, higher resolution",
+      "layout": "A1 layout with the tape removed",
+      "files": ["20261113_144943.jpg", "20261113_144947.jpg"],
+      "views": "top-down, oblique",
+      "notes": "dust and hairs on the desk are noise, not objects"
+    },
+    "R1": {
+      "scene": "red_mat",
+      "light": "normal",
+      "layout": "5 objects: gray-green cube, lime cube, 17, 10, multitool",
+      "files": ["20261113_124546.jpg", "20261113_124549.jpg"],
+      "notes": "10 is red on red, very low contrast"
+    },
+    "R2": {
+      "scene": "red_mat",
+      "light": "darker, tall faint shadows above the numbers",
+      "layout": "R1 with both cubes removed",
+      "files": ["20261113_124558.jpg", "20261113_124600.jpg"]
+    }
+  },
+  "pairs": [
+    {
+      "id": "P01",
+      "before": "A1",
+      "after": "A2",
+      "purpose": "no-change pair, different lighting",
+      "expected": [],
+      "must_not_report": ["any change caused by light or shadows"]
+    },
+    {
+      "id": "P02",
+      "before": "A1",
+      "after": "B",
+      "purpose": "movement",
+      "expected": [
+        { "object": "cup", "verdict": "moved" },
+        { "object": "scissors", "verdict": "moved" },
+        { "object": "14", "verdict": "unchanged" },
+        { "object": "tape", "verdict": "unchanged" },
+        { "object": "headphones", "verdict": "unchanged" }
+      ]
+    },
+    {
+      "id": "P03",
+      "before": "A1",
+      "after": "D",
+      "purpose": "partial occlusion and ambiguity",
+      "expected": [
+        { "object": "14", "allowed": ["uncertain", "moved"], "forbidden": ["removed", "unchanged"] },
+        { "object": "cup", "verdict": "unchanged" },
+        { "object": "scissors", "verdict": "unchanged" },
+        { "object": "tape", "verdict": "unchanged" },
+        { "object": "headphones", "verdict": "unchanged" }
+      ],
+      "owner_verify": "Confirm the headphones were not nudged when 14 was placed next to them."
+    },
+    {
+      "id": "P04",
+      "before": "A1",
+      "after": "C",
+      "purpose": "combined: movement, partial occlusion and different light",
+      "expected": [
+        { "object": "cup", "verdict": "moved" },
+        { "object": "scissors", "verdict": "moved" },
+        { "object": "14", "allowed": ["uncertain", "moved"], "forbidden": ["removed", "unchanged"] },
+        { "object": "tape", "verdict": "unchanged" },
+        { "object": "headphones", "verdict": "unchanged" }
+      ]
+    },
+    {
+      "id": "P05",
+      "before": "B",
+      "after": "C",
+      "purpose": "unmoved objects under hard light, 14 ambiguity",
+      "expected": [
+        { "object": "14", "allowed": ["uncertain", "moved"], "forbidden": ["removed", "unchanged"] },
+        { "object": "cup", "verdict": "unchanged" },
+        { "object": "scissors", "verdict": "unchanged" },
+        { "object": "tape", "verdict": "unchanged" },
+        { "object": "headphones", "verdict": "unchanged" }
+      ]
+    },
+    {
+      "id": "P06",
+      "before": "A1",
+      "after": "H",
+      "after_photos": ["20261113_144541.jpg"],
+      "purpose": "hidden object, one low-angle photo only",
+      "expected": [
+        { "object": "book", "verdict": "added" },
+        { "object": "cup", "allowed": ["not_verifiable", "uncertain"], "forbidden": ["removed"] },
+        { "object": "scissors", "verdict": "unchanged" },
+        { "object": "14", "verdict": "unchanged" },
+        { "object": "tape", "verdict": "unchanged" },
+        { "object": "headphones", "verdict": "unchanged" }
+      ],
+      "clarification_round": "Add 20261113_144531.jpg (top-down). The model should have asked for a top or side view of the cup area."
+    },
+    {
+      "id": "P07",
+      "before": "A1",
+      "after": "H",
+      "after_photos": ["20261113_144531.jpg", "20261113_144541.jpg"],
+      "purpose": "same as P06 after the extra angle",
+      "expected": [
+        { "object": "book", "verdict": "added" },
+        { "object": "cup", "verdict": "unchanged", "owner_verify": "Becomes moved if the cup was touched." },
+        { "object": "scissors", "verdict": "unchanged" },
+        { "object": "14", "verdict": "unchanged" },
+        { "object": "tape", "verdict": "unchanged" },
+        { "object": "headphones", "verdict": "unchanged" }
+      ]
+    },
+    {
+      "id": "P08",
+      "before": "A1",
+      "after": "E",
+      "purpose": "removal with the old location visible and empty",
+      "expected": [
+        { "object": "tape", "verdict": "removed" },
+        { "object": "14", "verdict": "unchanged" },
+        { "object": "headphones", "verdict": "unchanged" },
+        { "object": "scissors", "verdict": "unchanged" },
+        { "object": "cup", "verdict": "unchanged" }
+      ]
+    },
+    {
+      "id": "P09",
+      "before": "E",
+      "after": "A1",
+      "purpose": "addition (reverse of P08)",
+      "expected": [
+        { "object": "tape", "verdict": "added" },
+        { "object": "14", "verdict": "unchanged" },
+        { "object": "headphones", "verdict": "unchanged" },
+        { "object": "scissors", "verdict": "unchanged" },
+        { "object": "cup", "verdict": "unchanged" }
+      ]
+    },
+    {
+      "id": "P10",
+      "before": "R1",
+      "after": "R2",
+      "holdout": true,
+      "purpose": "holdout: removal of two objects, darker light, low-contrast 10",
+      "expected": [
+        { "object": "gray-green cube", "verdict": "removed" },
+        { "object": "lime cube", "verdict": "removed" },
+        { "object": "17", "verdict": "unchanged" },
+        { "object": "10", "verdict": "unchanged", "known_risk": "red on red, may not be detected at all" },
+        { "object": "multitool", "verdict": "unchanged" }
+      ]
+    },
+    {
+      "id": "P11",
+      "before": "R2",
+      "after": "R1",
+      "holdout": true,
+      "purpose": "holdout: addition of two objects",
+      "expected": [
+        { "object": "gray-green cube", "verdict": "added" },
+        { "object": "lime cube", "verdict": "added" },
+        { "object": "17", "verdict": "unchanged" },
+        { "object": "10", "verdict": "unchanged", "known_risk": "red on red" },
+        { "object": "multitool", "verdict": "unchanged" }
+      ]
+    },
+    {
+      "id": "P12",
+      "before": "A1",
+      "after": "R1",
+      "purpose": "different scenes, the app must decline to conclude",
+      "expected": [],
+      "decline": true,
+      "must_not_report": ["any object-level change"]
+    }
+  ]
+}

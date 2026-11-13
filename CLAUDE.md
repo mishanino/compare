@@ -77,5 +77,5 @@ Report real numbers only.
   saying a step is done.
 - Check current provider docs before writing SDK code; do not guess API shapes.
 - `testset/` holds photos and `changelog.json` (ground truth). Read them only in the
-  eval script. Never tune prompts on `testset/s6_holdout`.
+  eval script. Never tune prompts on testset/holdout/. Run it only at the end.
 - Keep the UI plain: two screens, English only.

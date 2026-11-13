@@ -1,8 +1,27 @@
+# Dependencies
 node_modules/
+
+# Next.js build output
 .next/
 out/
 next-env.d.ts
 *.tsbuildinfo
+
+# Environment (secrets); keep the example
 .env*
 !.env.example
+
+# Run logs and measurements
 runs/
+*.log
+npm-debug.log*
+
+# Test coverage
+coverage/
+
+# OS and editor files
+.DS_Store
+Thumbs.db
+desktop.ini
+.vscode/
+.idea/
