@@ -4,13 +4,24 @@
  */
 import { randomUUID } from "node:crypto";
 import { cropEvidence, cropRegion, emptyRegionMismatch, toDataUrl, type Crop, type CropPair } from "./evidence";
-import { preprocessImage, PreprocessError, type PreprocessedImage, type SourceFormat } from "./preprocess";
+import { preprocessImage, PreprocessError, type ImageVariant, type PreprocessedImage, type SourceFormat } from "./preprocess";
 import { measureQuality, qualityProblem } from "./quality";
 import { appendRunLog, toLoggedCall, totalCost, type LoggedCall, type Prices, type RunLogEntry } from "./runlog";
 import type { PhotoSet, UploadedPhoto } from "./upload";
-import { applyVerification, computeReport, declineForPhotos, type ObjectVerdict, type Report, type VerificationResult } from "./verdict";
+import {
+  allVerdicts,
+  applyVerification,
+  computeReport,
+  declineForPhotos,
+  isChangeKind,
+  type ChangeKind,
+  type ObjectVerdict,
+  type Report,
+  type VerificationResult,
+} from "./verdict";
+import type { Observation } from "./vision/observation";
 import { VisionSchemaError, type VisionProvider } from "./vision/provider";
-import type { Claim, ClaimKind } from "./vision/verification";
+import type { Claim } from "./vision/verification";
 
 export interface PhotoInfo {
   photo: number;
@@ -44,6 +55,16 @@ export interface PipelineDeps {
   onStage?: (stage: PipelineStage) => void;
   /** Copied into the run log entry. */
   tag?: Record<string, string>;
+  /** Cancels the run: checked between stages and passed to every model call. */
+  signal?: AbortSignal;
+}
+
+/** The run was cancelled through `PipelineDeps.signal`. */
+export class CancelledError extends Error {
+  constructor() {
+    super("The comparison was cancelled.");
+    this.name = "CancelledError";
+  }
 }
 
 /** The vision call itself failed (network, quota, invalid output twice). */
@@ -54,7 +75,11 @@ export class VisionCallError extends Error {
   }
 }
 
-const CLAIM_KINDS: ClaimKind[] = ["moved", "added", "removed"];
+type Images = Record<PhotoSet, PreprocessedImage[]>;
+type FullImages = Record<PhotoSet, ImageVariant[]>;
+type ChangeVerdict = ObjectVerdict & { verdict: ChangeKind };
+
+const isChange = (v: ObjectVerdict): v is ChangeVerdict => isChangeKind(v.verdict);
 const short = (msg: string) => (msg.length > 300 ? `${msg.slice(0, 300)}…` : msg);
 
 /** Provider errors often carry a JSON body; keep only its human-readable message. */
@@ -69,7 +94,7 @@ export function readableError(err: unknown): string {
   return short(msg);
 }
 
-async function preprocessAll(photos: Record<PhotoSet, UploadedPhoto[]>) {
+async function preprocessAll(photos: Record<PhotoSet, UploadedPhoto[]>): Promise<Images> {
   const one = async (p: UploadedPhoto) => {
     try {
       return await preprocessImage(p.bytes);
@@ -84,11 +109,11 @@ async function preprocessAll(photos: Record<PhotoSet, UploadedPhoto[]>) {
   return { before, after };
 }
 
-async function photoProblems(images: { before: PreprocessedImage[]; after: PreprocessedImage[] }): Promise<string[]> {
+async function photoProblems(images: Images): Promise<string[]> {
   const problems: string[] = [];
   for (const set of ["before", "after"] as const) {
     for (const [i, img] of images[set].entries()) {
-      const p = qualityProblem(await measureQuality(img.model), `${set === "before" ? "BEFORE" : "AFTER"} photo ${i + 1}`);
+      const p = qualityProblem(await measureQuality(img.model), `${set.toUpperCase()} photo ${i + 1}`);
       if (p) problems.push(p);
     }
   }
@@ -105,10 +130,6 @@ function photoInfo(p: UploadedPhoto, img: PreprocessedImage): PhotoInfo {
   };
 }
 
-function allVerdicts(report: Report): ObjectVerdict[] {
-  return report.status === "ok" ? [...report.changes, ...report.uncertain, ...report.not_verifiable, ...report.unchanged] : [];
-}
-
 function counts(report: Report): Record<string, number> | undefined {
   if (report.status !== "ok") return undefined;
   return {
@@ -119,6 +140,137 @@ function counts(report: Report): Record<string, number> | undefined {
   };
 }
 
+/** Log entry for a model call that threw. Tokens are only known for schema failures. */
+function failedCall(stage: LoggedCall["stage"], provider: VisionProvider, err: unknown, wallMs: number): LoggedCall {
+  const error = readableError(err);
+  if (err instanceof VisionSchemaError) return toLoggedCall(stage, err.usage, error);
+  return { stage, model_id: provider.modelId, input_tokens: 0, output_tokens: 0, retries: 0, wall_ms: wallMs, error };
+}
+
+function throwIfCancelled(signal: AbortSignal | undefined) {
+  if (signal?.aborted) throw new CancelledError();
+}
+
+async function observe(provider: VisionProvider, images: Images, calls: LoggedCall[], signal?: AbortSignal): Promise<Observation> {
+  const t = Date.now();
+  try {
+    const input = { before: images.before.map((i) => i.model), after: images.after.map((i) => i.model) };
+    const r = await provider.observe(input, { signal });
+    calls.push(toLoggedCall("observe", r.usage));
+    return r.observation;
+  } catch (err) {
+    if (signal?.aborted) {
+      calls.push(failedCall("observe", provider, new CancelledError(), Date.now() - t));
+      throw new CancelledError();
+    }
+    calls.push(failedCall("observe", provider, err, Date.now() - t));
+    throw new VisionCallError(`The vision model call failed: ${readableError(err)}`);
+  }
+}
+
+interface EvidenceCrops {
+  /** Before / after pairs for verdicts with evidence. */
+  pairs: Map<string, CropPair>;
+  /** A single crop for not_verifiable objects: where they were last seen. */
+  lastSeen: Map<string, { set: PhotoSet; crop: Crop }>;
+}
+
+async function cropAll(report: Report, full: FullImages): Promise<EvidenceCrops> {
+  const crops: EvidenceCrops = { pairs: new Map(), lastSeen: new Map() };
+  for (const v of allVerdicts(report)) {
+    if (v.evidence) crops.pairs.set(v.object_id, await cropEvidence(full, v.evidence));
+    const img = v.last_seen ? full[v.last_seen.set][v.last_seen.photo - 1] : undefined;
+    if (v.last_seen && img) crops.lastSeen.set(v.object_id, { set: v.last_seen.set, crop: await cropRegion(img, v.last_seen.box) });
+  }
+  return crops;
+}
+
+/**
+ * Added / removed: the empty-place box must match the object's box, or the pair
+ * does not show the same place and the claim cannot be confirmed.
+ * Returns the reason, or null when the regions match or the check does not apply.
+ */
+function regionMismatch(v: ChangeVerdict, full: FullImages): string | null {
+  const { evidence } = v;
+  if (v.verdict === "moved" || !evidence) return null;
+  const side = (set: PhotoSet) => {
+    const img = full[set][evidence[set].photo - 1];
+    return { box: evidence[set].box, width: img.width, height: img.height };
+  };
+  return v.verdict === "removed"
+    ? emptyRegionMismatch(side("before"), side("after"))
+    : emptyRegionMismatch(side("after"), side("before"));
+}
+
+/**
+ * A change is only reported once the verify step confirms it. A claim without
+ * crops, with mismatched regions, without an answer, or a failed verify call,
+ * cannot be confirmed, so it becomes uncertain.
+ */
+async function verifyChanges(
+  provider: VisionProvider,
+  changes: ChangeVerdict[],
+  ctx: { pairs: Map<string, CropPair>; full: FullImages; observation: Observation; calls: LoggedCall[]; signal?: AbortSignal },
+): Promise<VerificationResult[]> {
+  const descriptions = new Map(ctx.observation.objects.map((o) => [o.id, o.description]));
+  const unchecked = (object_id: string, note: string): VerificationResult => ({ object_id, confirmed: false, checked: false, note });
+  const results: VerificationResult[] = [];
+  const claims: Claim[] = [];
+  for (const v of changes) {
+    const pair = ctx.pairs.get(v.object_id);
+    if (!pair) {
+      results.push(unchecked(v.object_id, "no evidence crops were available"));
+      continue;
+    }
+    const mismatch = regionMismatch(v, ctx.full);
+    if (mismatch) {
+      results.push({ object_id: v.object_id, confirmed: false, note: mismatch });
+      continue;
+    }
+    claims.push({
+      id: v.object_id,
+      kind: v.verdict,
+      label: v.label,
+      description: descriptions.get(v.object_id) ?? v.label,
+      before: pair.before.jpeg,
+      after: pair.after.jpeg,
+    });
+  }
+  if (claims.length === 0) return results;
+
+  throwIfCancelled(ctx.signal);
+  const t = Date.now();
+  try {
+    const r = await provider.verify(claims, { signal: ctx.signal });
+    ctx.calls.push(toLoggedCall("verify", r.usage));
+    const answers = new Map(r.results.map((c) => [c.id, c]));
+    for (const c of claims) {
+      const a = answers.get(c.id);
+      results.push(a ? { object_id: c.id, confirmed: a.confirmed, note: a.reason } : unchecked(c.id, "the verification step gave no answer"));
+    }
+  } catch (err) {
+    // A cancelled run has no report, so it must not turn into "could not be checked".
+    if (ctx.signal?.aborted) {
+      ctx.calls.push(failedCall("verify", provider, new CancelledError(), Date.now() - t));
+      throw new CancelledError();
+    }
+    ctx.calls.push(failedCall("verify", provider, err, Date.now() - t));
+    for (const c of claims) results.push(unchecked(c.id, "the verification call failed"));
+  }
+  return results;
+}
+
+function cropUrls(report: Report, { pairs, lastSeen }: EvidenceCrops): CompareResult["crops"] {
+  const crops: CompareResult["crops"] = {};
+  for (const v of allVerdicts(report)) {
+    const pair = pairs.get(v.object_id);
+    const seen = lastSeen.get(v.object_id);
+    if (pair) crops[v.object_id] = { before: toDataUrl(pair.before.jpeg), after: toDataUrl(pair.after.jpeg) };
+    else if (seen) crops[v.object_id] = { [seen.set]: toDataUrl(seen.crop.jpeg) };
+  }
+  return crops;
+}
+
 export async function runCompare(photos: Record<PhotoSet, UploadedPhoto[]>, deps: PipelineDeps): Promise<CompareResult> {
   const runId = randomUUID();
   const started = Date.now();
@@ -127,6 +279,8 @@ export async function runCompare(photos: Record<PhotoSet, UploadedPhoto[]>, deps
   let provider: VisionProvider | null = null;
   let report: Report | null = null;
   let failure: string | undefined;
+  let cancelled = false;
+  const { signal } = deps;
 
   const timed = async <T>(stage: string, fn: () => Promise<T> | T): Promise<T> => {
     const t = Date.now();
@@ -138,127 +292,52 @@ export async function runCompare(photos: Record<PhotoSet, UploadedPhoto[]>, deps
   };
 
   try {
+    throwIfCancelled(signal);
     deps.onStage?.("prepare");
     const images = await timed("preprocess", () => preprocessAll(photos));
     const info = {
       before: photos.before.map((ph, i) => photoInfo(ph, images.before[i])),
       after: photos.after.map((ph, i) => photoInfo(ph, images.after[i])),
     };
+    const result = (r: Report, crops: CompareResult["crops"], modelId: string | null): CompareResult => ({
+      report: r,
+      crops,
+      photos: info,
+      run: { id: runId, model_id: modelId, wall_ms: Date.now() - started, cost_usd: totalCost(calls, deps.prices) },
+    });
 
     // Unusable photos are declined in code, before paying for a model call.
     const problems = await timed("quality", () => photoProblems(images));
+    throwIfCancelled(signal);
     if (problems.length > 0) {
       report = declineForPhotos(problems);
-      return {
-        report,
-        crops: {},
-        photos: info,
-        run: { id: runId, model_id: null, wall_ms: Date.now() - started, cost_usd: totalCost(calls, deps.prices) },
-      };
+      return result(report, {}, null);
     }
 
-    provider = await deps.getProvider();
-    const p = provider;
+    const model = await deps.getProvider();
+    provider = model;
 
+    throwIfCancelled(signal);
     deps.onStage?.("observe");
-    const observed = await timed("observe", async () => {
-      try {
-        const r = await p.observe({ before: images.before.map((i) => i.model), after: images.after.map((i) => i.model) });
-        calls.push(toLoggedCall("observe", r.usage));
-        return r;
-      } catch (err) {
-        if (err instanceof VisionSchemaError) calls.push(toLoggedCall("observe", err.usage, err.message));
-        throw new VisionCallError(`The vision model call failed: ${readableError(err)}`);
-      }
-    });
+    const observation = await timed("observe", () => observe(model, images, calls, signal));
 
+    throwIfCancelled(signal);
     deps.onStage?.("check");
-    report = await timed("verdict", () => computeReport(observed.observation));
+    const judged = await timed("verdict", () => computeReport(observation));
+    report = judged;
 
     const full = { before: images.before.map((i) => i.full), after: images.after.map((i) => i.full) };
-    const pairs = new Map<string, CropPair>();
-    const lastSeen = new Map<string, { set: PhotoSet; crop: Crop }>();
-    await timed("evidence", async () => {
-      for (const v of allVerdicts(report!)) {
-        if (v.evidence) pairs.set(v.object_id, await cropEvidence(full, v.evidence));
-        const img = v.last_seen ? full[v.last_seen.set][v.last_seen.photo - 1] : undefined;
-        if (v.last_seen && img) lastSeen.set(v.object_id, { set: v.last_seen.set, crop: await cropRegion(img, v.last_seen.box) });
-      }
-    });
+    const crops = await timed("evidence", () => cropAll(judged, full));
+    const results = await timed("verify", () =>
+      verifyChanges(model, allVerdicts(judged).filter(isChange), { pairs: crops.pairs, full, observation, calls, signal }),
+    );
+    throwIfCancelled(signal);
+    report = applyVerification(judged, results);
 
-    // Added / removed: the empty-place box must match the object's box, or the
-    // pair does not show the same place and the claim cannot be confirmed.
-    const mismatched = new Map<string, string>();
-    for (const v of allVerdicts(report)) {
-      if ((v.verdict !== "added" && v.verdict !== "removed") || !v.evidence) continue;
-      const objectSide = v.verdict === "removed" ? "before" : "after";
-      const emptySide = v.verdict === "removed" ? "after" : "before";
-      const side = (s: PhotoSet) => {
-        const img = full[s][v.evidence![s].photo - 1];
-        return { box: v.evidence![s].box, width: img.width, height: img.height };
-      };
-      const why = emptyRegionMismatch(side(objectSide), side(emptySide));
-      if (why) mismatched.set(v.object_id, why);
-    }
-
-    const objects = new Map(observed.observation.objects.map((o) => [o.id, o]));
-    const claims: Claim[] = allVerdicts(report)
-      .filter((v) => CLAIM_KINDS.includes(v.verdict as ClaimKind) && pairs.has(v.object_id) && !mismatched.has(v.object_id))
-      .map((v) => ({
-        id: v.object_id,
-        kind: v.verdict as ClaimKind,
-        label: v.label,
-        description: objects.get(v.object_id)?.description ?? v.label,
-        before: pairs.get(v.object_id)!.before.jpeg,
-        after: pairs.get(v.object_id)!.after.jpeg,
-      }));
-
-    // A change is only reported once the verify step confirms it. A claim without
-    // crops, with mismatched regions, or a failed verify call, cannot be confirmed,
-    // so it becomes uncertain.
-    const results: VerificationResult[] = await timed("verify", async () => {
-      const unverifiable: VerificationResult[] = [
-        ...allVerdicts(report!)
-          .filter((v) => CLAIM_KINDS.includes(v.verdict as ClaimKind) && !pairs.has(v.object_id))
-          .map((v) => ({ object_id: v.object_id, confirmed: false, checked: false, note: "no evidence crops were available" })),
-        ...[...mismatched].map(([object_id, note]) => ({ object_id, confirmed: false, note })),
-      ];
-      if (claims.length === 0) return unverifiable;
-      try {
-        const r = await p.verify(claims);
-        calls.push(toLoggedCall("verify", r.usage));
-        return [
-          ...unverifiable,
-          ...r.results.map((c) => ({ object_id: c.id, confirmed: c.confirmed, note: c.reason })),
-        ];
-      } catch (err) {
-        const msg = readableError(err);
-        if (err instanceof VisionSchemaError) calls.push(toLoggedCall("verify", err.usage, msg));
-        else calls.push({ stage: "verify", model_id: p.modelId, input_tokens: 0, output_tokens: 0, retries: 0, wall_ms: 0, error: msg });
-        return [
-          ...unverifiable,
-          ...claims.map((c) => ({ object_id: c.id, confirmed: false, checked: false, note: "the verification call failed" })),
-        ];
-      }
-    });
-    report = applyVerification(report, results);
-
-    const crops: CompareResult["crops"] = {};
-    for (const v of allVerdicts(report)) {
-      const pair = pairs.get(v.object_id);
-      if (pair) crops[v.object_id] = { before: toDataUrl(pair.before.jpeg), after: toDataUrl(pair.after.jpeg) };
-      const seen = lastSeen.get(v.object_id);
-      if (!pair && seen) crops[v.object_id] = { [seen.set]: toDataUrl(seen.crop.jpeg) };
-    }
-
-    return {
-      report,
-      crops,
-      photos: info,
-      run: { id: runId, model_id: provider.modelId, wall_ms: Date.now() - started, cost_usd: totalCost(calls, deps.prices) },
-    };
+    return result(report, cropUrls(report, crops), model.modelId);
   } catch (err) {
-    failure = short((err as Error).message);
+    if (err instanceof CancelledError) cancelled = true;
+    else failure = short(err instanceof Error ? err.message : String(err)) || "unknown error";
     throw err;
   } finally {
     const entry: RunLogEntry = {
@@ -266,7 +345,7 @@ export async function runCompare(photos: Record<PhotoSet, UploadedPhoto[]>, deps
       run_id: runId,
       provider: provider?.name ?? null,
       model_id: provider?.modelId ?? null,
-      outcome: failure ? "error" : report?.status === "declined" ? "declined" : "ok",
+      outcome: cancelled ? "cancelled" : failure ? "error" : report?.status === "declined" ? "declined" : "ok",
       ...(failure ? { error: failure } : {}),
       photos: { before: photos.before.length, after: photos.after.length },
       calls,
@@ -274,7 +353,7 @@ export async function runCompare(photos: Record<PhotoSet, UploadedPhoto[]>, deps
       total_ms: Date.now() - started,
       prices: deps.prices,
       cost_usd: totalCost(calls, deps.prices),
-      ...(report && !failure ? { counts: counts(report) } : {}),
+      ...(report && !failure && !cancelled ? { counts: counts(report) } : {}),
       ...(deps.tag ? { tag: deps.tag } : {}),
     };
     await appendRunLog(entry, deps.logPath);

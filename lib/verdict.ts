@@ -10,7 +10,12 @@ import type { Box, Observation, ObservedObject, Sighting } from "./vision/observ
 /** Below this match_confidence an object seen in both sets is "uncertain". */
 export const MIN_MATCH_CONFIDENCE = 0.6;
 
-export type VerdictKind = "moved" | "added" | "removed" | "unchanged" | "not_verifiable" | "uncertain";
+/** The verdicts that are reported as a change. */
+export const CHANGE_KINDS = ["moved", "added", "removed"] as const;
+export type ChangeKind = (typeof CHANGE_KINDS)[number];
+export type VerdictKind = ChangeKind | "unchanged" | "not_verifiable" | "uncertain";
+
+export const isChangeKind = (v: VerdictKind): v is ChangeKind => (CHANGE_KINDS as readonly VerdictKind[]).includes(v);
 
 export interface EvidenceCrop {
   /** 1-based photo index within its set. */
@@ -56,10 +61,18 @@ export type Report =
       notes: SceneNotes;
     };
 
+/** Every verdict of a report in display order; empty for a declined report. */
+export function allVerdicts(report: Report): ObjectVerdict[] {
+  return report.status === "ok" ? [...report.changes, ...report.uncertain, ...report.not_verifiable, ...report.unchanged] : [];
+}
+
 type WithBox = Sighting & { box: Box };
+type SetName = Sighting["set"];
 
 const hasBox = (s: Sighting): s is WithBox => s.box !== undefined;
 const area = (b: Box) => b.w * b.h;
+const has = (o: ObservedObject, set: SetName, status: Sighting["status"]) =>
+  o.sightings.some((s) => s.set === set && s.status === status);
 
 /** Largest box wins (more pixels for the crop); ties go to the lower photo number. */
 function bestSighting(sightings: Sighting[], set: Sighting["set"], status: Sighting["status"]): WithBox | undefined {
@@ -115,8 +128,8 @@ function blockedReason(o: ObservedObject, missingSet: Sighting["set"]): string {
 /** Adds the photo request target and, for not_verifiable, the last-seen crop. */
 export function judgeObject(obs: Observation, o: ObservedObject): ObjectVerdict {
   const core = judgeCore(obs, o);
-  const visibleBefore = o.sightings.some((s) => s.set === "before" && s.status === "visible");
-  const visibleAfter = o.sightings.some((s) => s.set === "after" && s.status === "visible");
+  const visibleBefore = has(o, "before", "visible");
+  const visibleAfter = has(o, "after", "visible");
   if (core.verdict === "uncertain") return { ...core, requested_set: "after", last_seen: null };
   if (core.verdict !== "not_verifiable") return { ...core, requested_set: null, last_seen: null };
   const seenSet = visibleBefore && !visibleAfter ? "before" : visibleAfter && !visibleBefore ? "after" : null;
@@ -128,10 +141,47 @@ export function judgeObject(obs: Observation, o: ObservedObject): ObjectVerdict 
   };
 }
 
+/**
+ * Seen in one set only. A change needs the place to be visible and empty in the
+ * other set: seen BEFORE -> removed, seen AFTER -> added. Otherwise not_verifiable.
+ */
+function judgeOneSided(obs: Observation, o: ObservedObject, seenSet: SetName): CoreVerdict {
+  const base = { object_id: o.id, label: o.label };
+  const missingSet: SetName = seenSet === "before" ? "after" : "before";
+  if (!has(o, missingSet, "location_empty")) {
+    return {
+      ...base,
+      verdict: "not_verifiable",
+      reason: blockedReason(o, missingSet),
+      evidence: null,
+      requested_angle: missingSideAngle(obs, o, missingSet),
+    };
+  }
+  const seen = bestSighting(o.sightings, seenSet, "visible");
+  const empty = bestSighting(o.sightings, missingSet, "location_empty");
+  const emptyPhoto = `${missingSet.toUpperCase()} photo ${empty?.photo ?? "?"}`;
+  if (seenSet === "before") {
+    return {
+      ...base,
+      verdict: "removed",
+      reason: `Before: ${o.position_before}. In ${emptyPhoto} that place is visible and empty.`,
+      evidence: pair(seen, empty),
+      requested_angle: null,
+    };
+  }
+  return {
+    ...base,
+    verdict: "added",
+    reason: `After: ${o.position_after}. In ${emptyPhoto} that place is visible and empty.`,
+    evidence: pair(empty, seen),
+    requested_angle: null,
+  };
+}
+
 function judgeCore(obs: Observation, o: ObservedObject): CoreVerdict {
   const base = { object_id: o.id, label: o.label };
-  const visibleBefore = o.sightings.some((s) => s.set === "before" && s.status === "visible");
-  const visibleAfter = o.sightings.some((s) => s.set === "after" && s.status === "visible");
+  const visibleBefore = has(o, "before", "visible");
+  const visibleAfter = has(o, "after", "visible");
   const vb = bestSighting(o.sightings, "before", "visible");
   const va = bestSighting(o.sightings, "after", "visible");
 
@@ -169,47 +219,8 @@ function judgeCore(obs: Observation, o: ObservedObject): CoreVerdict {
     };
   }
 
-  if (visibleBefore) {
-    const empty = o.sightings.some((s) => s.set === "after" && s.status === "location_empty");
-    if (empty) {
-      const ea = bestSighting(o.sightings, "after", "location_empty");
-      return {
-        ...base,
-        verdict: "removed",
-        reason: `Before: ${o.position_before}. In AFTER photo ${ea?.photo ?? "?"} that place is visible and empty.`,
-        evidence: pair(vb, ea),
-        requested_angle: null,
-      };
-    }
-    return {
-      ...base,
-      verdict: "not_verifiable",
-      reason: blockedReason(o, "after"),
-      evidence: null,
-      requested_angle: missingSideAngle(obs, o, "after"),
-    };
-  }
-
-  if (visibleAfter) {
-    const empty = o.sightings.some((s) => s.set === "before" && s.status === "location_empty");
-    if (empty) {
-      const eb = bestSighting(o.sightings, "before", "location_empty");
-      return {
-        ...base,
-        verdict: "added",
-        reason: `After: ${o.position_after}. In BEFORE photo ${eb?.photo ?? "?"} that place is visible and empty.`,
-        evidence: pair(eb, va),
-        requested_angle: null,
-      };
-    }
-    return {
-      ...base,
-      verdict: "not_verifiable",
-      reason: blockedReason(o, "before"),
-      evidence: null,
-      requested_angle: missingSideAngle(obs, o, "before"),
-    };
-  }
+  if (visibleBefore) return judgeOneSided(obs, o, "before");
+  if (visibleAfter) return judgeOneSided(obs, o, "after");
 
   // Not covered by the rules: listed but never seen. Never treat as a change.
   return {
@@ -232,7 +243,7 @@ function group(verdicts: ObjectVerdict[], notes: SceneNotes): Report {
   const of = (...kinds: VerdictKind[]) => verdicts.filter((v) => kinds.includes(v.verdict));
   return {
     status: "ok",
-    changes: of("moved", "added", "removed"),
+    changes: of(...CHANGE_KINDS),
     uncertain: of("uncertain"),
     not_verifiable: of("not_verifiable"),
     unchanged: of("unchanged"),
@@ -273,10 +284,9 @@ export interface VerificationResult {
 export function applyVerification(report: Report, results: VerificationResult[]): Report {
   if (report.status !== "ok") return report;
   const rejected = new Map(results.filter((r) => !r.confirmed).map((r) => [r.object_id, r]));
-  const all = [...report.changes, ...report.uncertain, ...report.not_verifiable, ...report.unchanged];
-  const updated = all.map((v): ObjectVerdict => {
+  const updated = allVerdicts(report).map((v): ObjectVerdict => {
     const r = rejected.get(v.object_id);
-    if (!r || !["moved", "added", "removed"].includes(v.verdict)) return v;
+    if (!r || !isChangeKind(v.verdict)) return v;
     const ref = v.evidence ? ` from the same angle as BEFORE photo ${v.evidence.before.photo}` : "";
     return {
       ...v,

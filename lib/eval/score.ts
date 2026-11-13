@@ -2,7 +2,7 @@
  * Scoring of one report against the ground truth of one pair. Pure code, used by
  * scripts/eval.ts and unit-tested on synthetic data (tests never read testset/).
  */
-import type { Report, VerdictKind } from "../verdict";
+import { allVerdicts, isChangeKind as isChange, type Report, type VerdictKind } from "../verdict";
 
 export type GtVerdict = VerdictKind;
 
@@ -49,9 +49,6 @@ export const SYNONYMS: Record<string, string[]> = {
   ...Object.fromEntries(Object.entries(DESK).map(([k, v]) => [k, v.filter((w) => w !== "pink")])),
   ...RED_MAT,
 };
-
-const CHANGES: GtVerdict[] = ["moved", "added", "removed"];
-const isChange = (v: GtVerdict) => CHANGES.includes(v);
 
 const norm = (s: string) => ` ${s.toLowerCase().replace(/[^a-z0-9-]+/g, " ").replace(/\s+/g, " ").trim()} `;
 
@@ -104,7 +101,7 @@ export function scoreRun(pair: PairSpec, report: Report, synonyms: Record<string
     return s;
   }
 
-  const verdicts = [...report.changes, ...report.uncertain, ...report.not_verifiable, ...report.unchanged];
+  const verdicts = allVerdicts(report);
   const gtByName = new Map(pair.expected.map((g) => [g.object, g]));
   const seen = new Map<string, GtVerdict>();
 

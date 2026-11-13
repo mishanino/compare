@@ -33,6 +33,11 @@ export interface VerifyResult {
   usage: CallUsage;
 }
 
+export interface CallOptions {
+  /** Aborts the request on the client side. Tokens already spent are still billed. */
+  signal?: AbortSignal;
+}
+
 /**
  * A vision model behind a fixed interface. It only observes and checks crops;
  * it never decides verdicts.
@@ -40,9 +45,9 @@ export interface VerifyResult {
 export interface VisionProvider {
   readonly name: string;
   readonly modelId: string;
-  observe(input: ObserveInput): Promise<ObserveResult>;
+  observe(input: ObserveInput, options?: CallOptions): Promise<ObserveResult>;
   /** One call for all claims. Must return exactly one result per claim id. */
-  verify(claims: Claim[]): Promise<VerifyResult>;
+  verify(claims: Claim[], options?: CallOptions): Promise<VerifyResult>;
 }
 
 /** Raised when the model output fails validation after the allowed retry. */

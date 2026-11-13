@@ -1,6 +1,19 @@
 import type { ButtonHTMLAttributes, ReactNode } from "react";
 
-type ButtonProps = ButtonHTMLAttributes<HTMLButtonElement> & { glyph?: string };
+type ButtonProps = ButtonHTMLAttributes<HTMLButtonElement> & { glyph?: ReactNode };
+
+/**
+ * Square loader in the current text colour. Decorative: the state is always
+ * written out next to it. Holds still for users who prefer reduced motion.
+ */
+export function Spinner({ className = "" }: { className?: string }) {
+  return (
+    <span
+      aria-hidden="true"
+      className={`inline-block h-[14px] w-[14px] shrink-0 animate-spin border-2 border-current border-t-transparent motion-reduce:animate-none ${className}`}
+    />
+  );
+}
 
 /** Primary: accent fill, label left, glyph right. */
 export function PrimaryButton({ children, glyph = "→", className = "", ...rest }: ButtonProps) {

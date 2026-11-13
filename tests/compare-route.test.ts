@@ -1,4 +1,4 @@
-import { mkdtemp } from "node:fs/promises";
+import { mkdtemp, readFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -87,6 +87,29 @@ describe("POST /api/compare", () => {
   it("returns 400 JSON for a non-multipart body", async () => {
     const res = await POST(new Request("http://localhost/api/compare", { method: "POST", body: "{}" }));
     expect(res.status).toBe(400);
+  });
+
+  it("refuses an oversized body before reading it", async () => {
+    const res = await POST(
+      new Request("http://localhost/api/compare", { method: "POST", body: "x", headers: { "content-length": String(10 ** 10) } }),
+    );
+    expect(res.status).toBe(400);
+    expect(await failure(res)).toMatchObject({ code: "bad_upload", message: "The upload is too large." });
+  });
+
+  it("cancels the run when the client disconnects", async () => {
+    const res = await post([
+      ["before", blob(await makeTexturedImage(100, 100)), "b.jpg"],
+      ["after", blob(await makeTexturedImage(100, 100)), "a.jpg"],
+    ]);
+    const fake = provider.current as FakeProvider;
+    await res.body!.cancel();
+    await vi.waitFor(async () => {
+      const lines = (await readFile(process.env.RUN_LOG_PATH!, "utf8")).trim().split("\n");
+      expect(JSON.parse(lines.at(-1)!).outcome).toBe("cancelled");
+    });
+    expect(fake.observeCalls).toBe(0);
+    expect(fake.verifyCalls).toHaveLength(0);
   });
 
   it("streams a config error without leaking details", async () => {

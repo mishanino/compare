@@ -1,4 +1,5 @@
 import { z } from "zod";
+import type { ChangeKind } from "../verdict";
 
 /** One verdict per claim, as returned by the verify call. */
 export const ClaimCheckSchema = z.object({
@@ -12,7 +13,7 @@ export type ClaimCheck = z.infer<typeof ClaimCheckSchema>;
 export const VerificationSchema = z.object({ results: z.array(ClaimCheckSchema) });
 export type Verification = z.infer<typeof VerificationSchema>;
 
-export type ClaimKind = "moved" | "added" | "removed";
+export type ClaimKind = ChangeKind;
 
 export interface Claim {
   /** Object id from the observation. */

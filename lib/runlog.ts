@@ -36,7 +36,7 @@ export interface RunLogEntry {
   run_id: string;
   provider: string | null;
   model_id: string | null;
-  outcome: "ok" | "declined" | "error";
+  outcome: "ok" | "declined" | "error" | "cancelled";
   error?: string;
   photos: { before: number; after: number };
   calls: LoggedCall[];

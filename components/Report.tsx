@@ -122,7 +122,7 @@ function UnchangedList({ items }: { items: ObjectVerdict[] }) {
       <summary className="flex min-h-14 flex-wrap items-center gap-3 px-6 text-small hover:bg-soft">
         <span className="font-mono text-label font-medium tracking-badge text-muted">= UNCHANGED · {items.length}</span>
         <span>{items.map((v) => displayName(v.label)).join(", ")}</span>
-        <Mono className="ml-auto" >
+        <Mono className="ml-auto">
           <span aria-hidden="true">+</span>
         </Mono>
       </summary>
@@ -210,8 +210,8 @@ export function DeclinedView({ result, onStartOver }: { result: CompareResult; o
       <VerdictBadge kind="declined" />
       <h2 className="text-title">Can&apos;t compare these photos</h2>
       <ul className="m-0 flex list-disc flex-col gap-1 pl-5 text-body">
-        {r.reasons.map((reason) => (
-          <li key={reason}>{reason}</li>
+        {r.reasons.map((reason, i) => (
+          <li key={i}>{reason}</li>
         ))}
       </ul>
       <p className="m-0 text-small text-muted">Retake both sets of the same desk or room, in similar light.</p>

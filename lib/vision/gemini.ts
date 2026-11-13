@@ -4,6 +4,7 @@ import { checkObservation, makeObservationSchema, type Box, type Observation } f
 import { buildObservePrompt } from "./observe-prompt";
 import {
   VisionSchemaError,
+  type CallOptions,
   type CallUsage,
   type ModelImage,
   type ObserveInput,
@@ -66,10 +67,10 @@ export interface GeminiResponseLike {
 }
 export type GenerateFn = (params: GenerateContentParameters) => Promise<GeminiResponseLike>;
 
-type ParseResult = { ok: true; observation: Observation } | { ok: false; problems: string[] };
+type Parsed<T> = { ok: true; value: T } | { ok: false; problems: string[] };
 
-/** Parses model text into a contract Observation, or lists what is wrong with it. */
-export function parseGeminiObservation(text: string | undefined, counts: { before: number; after: number }): ParseResult {
+/** Model text -> JSON -> schema. Every structured answer goes through this first. */
+function parseAs<S extends z.ZodType>(text: string | undefined, schema: S): Parsed<z.infer<S>> {
   if (!text) return { ok: false, problems: ["empty response"] };
   let json: unknown;
   try {
@@ -77,54 +78,40 @@ export function parseGeminiObservation(text: string | undefined, counts: { befor
   } catch {
     return { ok: false, problems: ["response is not valid JSON"] };
   }
-  const parsed = GeminiObservationSchema.safeParse(json);
+  const parsed = schema.safeParse(json);
   if (!parsed.success) {
     return { ok: false, problems: parsed.error.issues.map((i) => `${i.path.join(".") || "(root)"}: ${i.message}`) };
   }
-  const observation = toObservation(parsed.data);
+  return { ok: true, value: parsed.data };
+}
+
+/** Parses model text into a contract Observation, or lists what is wrong with it. */
+export function parseGeminiObservation(text: string | undefined, counts: { before: number; after: number }): Parsed<Observation> {
+  const parsed = parseAs(text, GeminiObservationSchema);
+  if (!parsed.ok) return parsed;
+  const observation = toObservation(parsed.value);
   const problems = checkObservation(observation, counts);
-  for (const o of observation.objects) {
-    for (const s of o.sightings) {
-      if (s.box && (s.box.w <= 0 || s.box.h <= 0)) {
-        problems.push(`object "${o.id}": ${s.set} photo ${s.photo} has a zero-area box`);
-      }
-    }
-  }
-  return problems.length ? { ok: false, problems } : { ok: true, observation };
+  return problems.length ? { ok: false, problems } : { ok: true, value: observation };
 }
-
-function imageParts(set: "BEFORE" | "AFTER", images: ModelImage[]): Part[] {
-  return images.flatMap((img, i) => [
-    { text: `${set} photo ${i + 1}` },
-    { inlineData: { mimeType: "image/jpeg", data: img.jpeg.toString("base64") } },
-  ]);
-}
-
-type Parsed<T> = { ok: true; value: T } | { ok: false; problems: string[] };
 
 /** Parses the verify answer and checks it answers every claim exactly once. */
 export function parseGeminiVerification(text: string | undefined, claimIds: string[]): Parsed<ClaimCheck[]> {
-  if (!text) return { ok: false, problems: ["empty response"] };
-  let json: unknown;
-  try {
-    json = JSON.parse(text);
-  } catch {
-    return { ok: false, problems: ["response is not valid JSON"] };
-  }
-  const parsed = VerificationSchema.safeParse(json);
-  if (!parsed.success) {
-    return { ok: false, problems: parsed.error.issues.map((i) => `${i.path.join(".") || "(root)"}: ${i.message}`) };
-  }
-  const problems = checkVerification(parsed.data, claimIds);
-  return problems.length ? { ok: false, problems } : { ok: true, value: parsed.data.results };
+  const parsed = parseAs(text, VerificationSchema);
+  if (!parsed.ok) return parsed;
+  const problems = checkVerification(parsed.value, claimIds);
+  return problems.length ? { ok: false, problems } : { ok: true, value: parsed.value.results };
 }
 
-const jsonSchemaOf = (schema: z.ZodType) => {
+function jsonSchemaOf(schema: z.ZodType): Record<string, unknown> {
   const { $schema: _ignored, ...rest } = z.toJSONSchema(schema) as Record<string, unknown>;
   return rest;
-};
+}
 
 const jpegPart = (jpeg: Buffer): Part => ({ inlineData: { mimeType: "image/jpeg", data: jpeg.toString("base64") } });
+
+function imageParts(set: "BEFORE" | "AFTER", images: ModelImage[]): Part[] {
+  return images.flatMap((img, i) => [{ text: `${set} photo ${i + 1}` }, jpegPart(img.jpeg)]);
+}
 
 /**
  * Transport policy, separate from the schema retry: a request may not hang
@@ -158,13 +145,16 @@ export class GeminiProvider implements VisionProvider {
     systemInstruction: string,
     responseJsonSchema: Record<string, unknown>,
     parse: (text: string | undefined) => Parsed<T>,
+    signal?: AbortSignal,
   ): Promise<{ value: T; usage: CallUsage }> {
-    const config = { systemInstruction, responseMimeType: "application/json", responseJsonSchema };
+    const config = { systemInstruction, responseMimeType: "application/json", responseJsonSchema, abortSignal: signal };
     const usage: CallUsage = { modelId: this.modelId, inputTokens: 0, outputTokens: 0, retries: 0, wallMs: 0 };
     const started = Date.now();
     let problems: string[] = [];
 
     for (let attempt = 0; attempt < 2; attempt++) {
+      // Never start a (paid) retry after the caller gave up.
+      signal?.throwIfAborted();
       const sent =
         attempt === 0
           ? parts
@@ -191,18 +181,22 @@ export class GeminiProvider implements VisionProvider {
     throw new VisionSchemaError(`The vision model returned an invalid ${what} twice: ${problems.slice(0, 5).join("; ")}`, usage);
   }
 
-  async observe(input: ObserveInput): Promise<ObserveResult> {
+  async observe(input: ObserveInput, options: CallOptions = {}): Promise<ObserveResult> {
     const counts = { before: input.before.length, after: input.after.length };
     const parts: Part[] = [...imageParts("BEFORE", input.before), ...imageParts("AFTER", input.after)];
     const prompt = buildObservePrompt({ beforeCount: counts.before, afterCount: counts.after, boxFormat: GEMINI_BOX_FORMAT });
-    const { value, usage } = await this.callJson("observation", parts, prompt, geminiResponseJsonSchema(), (text) => {
-      const r = parseGeminiObservation(text, counts);
-      return r.ok ? { ok: true, value: r.observation } : r;
-    });
+    const { value, usage } = await this.callJson(
+      "observation",
+      parts,
+      prompt,
+      geminiResponseJsonSchema(),
+      (text) => parseGeminiObservation(text, counts),
+      options.signal,
+    );
     return { observation: value, usage };
   }
 
-  async verify(claims: Claim[]): Promise<VerifyResult> {
+  async verify(claims: Claim[], options: CallOptions = {}): Promise<VerifyResult> {
     if (claims.length === 0) {
       return { results: [], usage: { modelId: this.modelId, inputTokens: 0, outputTokens: 0, retries: 0, wallMs: 0 } };
     }
@@ -220,6 +214,7 @@ export class GeminiProvider implements VisionProvider {
       buildVerifyPrompt(claims.length),
       jsonSchemaOf(VerificationSchema),
       (text) => parseGeminiVerification(text, ids),
+      options.signal,
     );
     return { results: value, usage };
   }

@@ -1,6 +1,8 @@
 /** Shared upload limits, used by both the UI and the API route. */
 export const MAX_PHOTOS_PER_SET = 3;
 export const MAX_FILE_BYTES = 30 * 1024 * 1024;
+/** Whole request body: both full sets plus multipart overhead. */
+export const MAX_UPLOAD_BYTES = 2 * MAX_PHOTOS_PER_SET * MAX_FILE_BYTES + 1024 * 1024;
 export const ACCEPT_ATTR = "image/jpeg,image/png,image/webp,image/heic,image/heif,.heic,.heif,.jpg,.jpeg,.png,.webp";
 
 export type PhotoSet = "before" | "after";

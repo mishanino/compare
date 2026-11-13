@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { DropZone, isImageFile, toPicked, type Picked } from "@/components/DropZone";
 import { DeclinedView, ErrorView, ReportView } from "@/components/Report";
 import { StageIndicator } from "@/components/StageIndicator";
-import { PrimaryButton } from "@/components/ui";
+import { PrimaryButton, SecondaryButton, Spinner } from "@/components/ui";
 import { CompareFailure, readCompareResponse } from "@/lib/compare-events";
 import type { CompareResult, PipelineStage } from "@/lib/pipeline";
 import { ACCEPT_ATTR, MAX_PHOTOS_PER_SET, type PhotoSet } from "@/lib/upload";
@@ -29,6 +29,8 @@ export default function Home() {
   const [notice, setNotice] = useState<string | null>(null);
   const extraInput = useRef<HTMLInputElement>(null);
   const extraTarget = useRef<PhotoSet>("after");
+  /** The running comparison; aborting it closes the request, which stops the run on the server. */
+  const inFlight = useRef<AbortController | null>(null);
 
   const processing = status === "processing";
   const ready = before.length > 0 && after.length > 0;
@@ -37,7 +39,13 @@ export default function Home() {
     if (status !== "processing") window.scrollTo({ top: 0 });
   }, [status]);
 
+  // Leaving the page cancels the run too.
+  useEffect(() => () => inFlight.current?.abort(), []);
+
   async function run(b: Picked[], a: Picked[]) {
+    inFlight.current?.abort();
+    const ac = new AbortController();
+    inFlight.current = ac;
     setStatus("processing");
     setStage(null);
     setFailure(null);
@@ -46,18 +54,33 @@ export default function Home() {
     b.forEach((p) => form.append("before", p.file, p.file.name));
     a.forEach((p) => form.append("after", p.file, p.file.name));
     try {
-      const res = await fetch("/api/compare", { method: "POST", body: form });
-      const out = await readCompareResponse(res, setStage);
+      const res = await fetch("/api/compare", { method: "POST", body: form, signal: ac.signal });
+      const out = await readCompareResponse(res, (s) => {
+        if (!ac.signal.aborted) setStage(s);
+      });
+      if (ac.signal.aborted) return;
       setResult(out);
       setStatus(out.report.status === "declined" ? "declined" : "report");
     } catch (err) {
+      // Cancelled: cancel() has already set the screen; a newer run may be on it now.
+      if (ac.signal.aborted) return;
       setFailure(
         err instanceof CompareFailure
           ? { code: err.code, status: err.status, message: err.message }
           : { code: "network", status: 0, message: "Network error. Check the connection." },
       );
       setStatus("error");
+    } finally {
+      if (inFlight.current === ac) inFlight.current = null;
     }
+  }
+
+  function cancel() {
+    inFlight.current?.abort();
+    inFlight.current = null;
+    setStage(null);
+    setNotice("Comparison cancelled. Your photos are still here.");
+    setStatus("idle");
   }
 
   function startOver() {
@@ -127,9 +150,15 @@ export default function Home() {
             <DropZone label="After" photos={after} onChange={setAfter} locked={processing} />
           </div>
           <div className="flex flex-wrap items-center gap-4">
-            <PrimaryButton disabled={!ready || processing} onClick={() => run(before, after)}>
+            <PrimaryButton
+              disabled={!ready || processing}
+              aria-busy={processing}
+              glyph={processing ? <Spinner /> : undefined}
+              onClick={() => run(before, after)}
+            >
               {processing ? "Comparing…" : "Compare"}
             </PrimaryButton>
+            {processing && <SecondaryButton onClick={cancel}>Cancel</SecondaryButton>}
             <span className="text-hint text-muted">{hint}</span>
           </div>
           {processing && <StageIndicator current={stage ?? "prepare"} />}

@@ -1,9 +1,9 @@
 import { NextResponse } from "next/server";
 import type { CompareEvent, ErrorCode } from "@/lib/compare-events";
-import { runCompare, VisionCallError } from "@/lib/pipeline";
+import { CancelledError, runCompare, VisionCallError } from "@/lib/pipeline";
 import { PreprocessError } from "@/lib/preprocess";
 import { pricesFromEnv } from "@/lib/runlog";
-import { readCompareForm, UploadError } from "@/lib/upload";
+import { MAX_UPLOAD_BYTES, readCompareForm, UploadError } from "@/lib/upload";
 import { createVisionProvider, VisionConfigError } from "@/lib/vision/provider";
 
 export const runtime = "nodejs";
@@ -32,6 +32,10 @@ function toErrorEvent(err: unknown): Extract<CompareEvent, { type: "error" }> {
 export async function POST(request: Request) {
   let photos: Awaited<ReturnType<typeof readCompareForm>>;
   try {
+    // Refuse an oversized body before buffering it; per-file limits are checked after parsing.
+    if (Number(request.headers.get("content-length")) > MAX_UPLOAD_BYTES) {
+      throw new UploadError("The upload is too large.");
+    }
     let form: FormData;
     try {
       form = await request.formData();
@@ -46,22 +50,47 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Internal error while reading the upload.", code: "internal" }, { status: 500 });
   }
 
+  // The user pressed Cancel or closed the tab: stop the run so no further
+  // (paid) model call starts. Either signal can arrive first, depending on the server.
+  const abort = new AbortController();
+  request.signal.addEventListener("abort", () => abort.abort(), { once: true });
+
   const encoder = new TextEncoder();
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
-      const send = (ev: CompareEvent) => controller.enqueue(encoder.encode(JSON.stringify(ev) + "\n"));
+      let open = true;
+      const send = (ev: CompareEvent) => {
+        if (!open) return;
+        try {
+          controller.enqueue(encoder.encode(JSON.stringify(ev) + "\n"));
+        } catch {
+          open = false;
+          abort.abort();
+        }
+      };
       try {
         const result = await runCompare(photos, {
           getProvider: () => createVisionProvider(),
           prices: pricesFromEnv(),
           onStage: (stage) => send({ type: "stage", stage }),
+          signal: abort.signal,
         });
         send({ type: "result", result });
       } catch (err) {
-        send(toErrorEvent(err));
+        // Nobody is listening to a cancelled run; the pipeline has already logged it.
+        if (!(err instanceof CancelledError)) send(toErrorEvent(err));
       } finally {
-        controller.close();
+        if (open) {
+          try {
+            controller.close();
+          } catch {
+            // Already closed by a cancel from the client.
+          }
+        }
       }
+    },
+    cancel() {
+      abort.abort();
     },
   });
 

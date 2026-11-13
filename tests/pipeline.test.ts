@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import sharp from "sharp";
 import { beforeEach, describe, expect, it } from "vitest";
-import { runCompare, VisionCallError } from "@/lib/pipeline";
+import { CancelledError, runCompare, VisionCallError } from "@/lib/pipeline";
 import { PreprocessError } from "@/lib/preprocess";
 import type { RunLogEntry } from "@/lib/runlog";
 import type { UploadedPhoto } from "@/lib/upload";
@@ -97,6 +97,17 @@ describe("runCompare", () => {
     expect(log.calls[1].error).toContain("bad twice");
   });
 
+  it("does not report a change the verify step gave no answer for", async () => {
+    const fake = new FakeProvider(sceneObservation(), (claims) =>
+      claims.filter((c) => c.id !== "o2").map((c) => ({ id: c.id, confirmed: true, reason: "ok" })),
+    );
+    const r = await run(fake);
+    if (r.report.status !== "ok") throw new Error("expected ok");
+    expect(r.report.changes.map((v) => v.object_id)).toEqual(["o1"]);
+    expect(r.report.uncertain.map((v) => v.object_id)).toEqual(["o2"]);
+    expect(r.report.uncertain[0].reason).toContain("could not be double-checked");
+  });
+
   it("skips verify when there are no claims", async () => {
     const obs = sceneObservation();
     obs.objects = obs.objects.filter((o) => o.id === "o3");
@@ -152,6 +163,64 @@ describe("runCompare", () => {
     const log = await lastLog();
     expect(log.outcome).toBe("error");
     expect(log.error).toContain("quota exceeded");
+    expect(log.calls).toMatchObject([{ stage: "observe", input_tokens: 0, output_tokens: 0, error: "quota exceeded" }]);
+  });
+
+  it("stops before verify when cancelled during observe, and logs it as cancelled", async () => {
+    const ac = new AbortController();
+    const fake = new FakeProvider(sceneObservation());
+    const realObserve = fake.observe.bind(fake);
+    let seen: AbortSignal | undefined;
+    fake.observe = async (input, options) => {
+      seen = options?.signal;
+      const r = await realObserve();
+      ac.abort();
+      return r;
+    };
+    await expect(runCompare(await photos(), { getProvider: async () => fake, prices, logPath, signal: ac.signal })).rejects.toThrow(
+      CancelledError,
+    );
+    expect(seen).toBe(ac.signal);
+    expect(fake.verifyCalls).toHaveLength(0);
+    const log = await lastLog();
+    expect(log.outcome).toBe("cancelled");
+    expect(log.error).toBeUndefined();
+    expect(log.counts).toBeUndefined();
+    // The observe call was paid for, so it stays in the log and the cost.
+    expect(log.calls.map((c) => c.stage)).toEqual(["observe"]);
+    expect(log.cost_usd).toBeCloseTo(0.03);
+  });
+
+  it("raises CancelledError, not a downgrade, when verify is aborted", async () => {
+    const ac = new AbortController();
+    const fake = new FakeProvider(sceneObservation(), () => {
+      ac.abort();
+      throw new DOMException("aborted", "AbortError");
+    });
+    await expect(runCompare(await photos(), { getProvider: async () => fake, prices, logPath, signal: ac.signal })).rejects.toThrow(
+      CancelledError,
+    );
+    const log = await lastLog();
+    expect(log.outcome).toBe("cancelled");
+    expect(log.calls.map((c) => [c.stage, c.error])).toEqual([
+      ["observe", undefined],
+      ["verify", "The comparison was cancelled."],
+    ]);
+  });
+
+  it("does not create the provider when cancelled before it starts", async () => {
+    let created = false;
+    const ac = new AbortController();
+    ac.abort();
+    await expect(
+      runCompare(await photos(), {
+        getProvider: async () => ((created = true), new FakeProvider(sceneObservation())),
+        prices,
+        logPath,
+        signal: ac.signal,
+      }),
+    ).rejects.toThrow(CancelledError);
+    expect(created).toBe(false);
   });
 
   it("does not create the provider when a photo is unreadable", async () => {

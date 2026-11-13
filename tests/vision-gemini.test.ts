@@ -65,8 +65,8 @@ describe("parseGeminiObservation", () => {
     const r = parseGeminiObservation(JSON.stringify(rawObservation()), counts);
     expect(r.ok).toBe(true);
     if (!r.ok) return;
-    expect(ObservationSchema.parse(r.observation)).toEqual(r.observation);
-    const s = r.observation.objects[0].sightings;
+    expect(ObservationSchema.parse(r.value)).toEqual(r.value);
+    const s = r.value.objects[0].sightings;
     expect(s[0].box?.x).toBeCloseTo(0.2);
     expect(s[2].box).toBeUndefined();
     expect(s[2].occluder).toBe("laptop lid");
@@ -160,6 +160,17 @@ describe("GeminiProvider.observe", () => {
     const generate = vi.fn<GenerateFn>().mockRejectedValue(new Error("quota"));
     await expect(new GeminiProvider("m", generate).observe(input)).rejects.toThrow("quota");
     expect(generate).toHaveBeenCalledTimes(1);
+  });
+
+  it("passes the abort signal to the SDK and skips the retry once aborted", async () => {
+    const ac = new AbortController();
+    const generate = vi.fn<GenerateFn>().mockImplementation(async () => {
+      ac.abort();
+      return bad;
+    });
+    await expect(new GeminiProvider("m", generate).observe(input, { signal: ac.signal })).rejects.toThrow();
+    expect(generate).toHaveBeenCalledTimes(1);
+    expect(generate.mock.calls[0][0].config?.abortSignal).toBe(ac.signal);
   });
 });
 

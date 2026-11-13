@@ -75,7 +75,7 @@ export type Sighting = ObservedObject["sightings"][number];
 /**
  * Checks that a schema-valid observation is also consistent with the input:
  * photo indices exist, every object has exactly one sighting per photo, ids are
- * unique, and visible / location_empty sightings carry a box.
+ * unique, visible / location_empty sightings carry a box, and no box is empty.
  * Returns a list of problems (empty when fine).
  */
 export function checkObservation(obs: Observation, counts: { before: number; after: number }): string[] {
@@ -100,6 +100,9 @@ export function checkObservation(obs: Observation, counts: { before: number; aft
       seen.add(key);
       if ((s.status === "visible" || s.status === "location_empty") && !s.box) {
         problems.push(`object "${o.id}": ${s.set} photo ${s.photo} is "${s.status}" but has no box`);
+      }
+      if (s.box && (s.box.w <= 0 || s.box.h <= 0)) {
+        problems.push(`object "${o.id}": ${s.set} photo ${s.photo} has a zero-area box`);
       }
     }
     for (const set of PHOTO_SETS) {

@@ -1,5 +1,5 @@
 import type { Observation, ObservedObject, Sighting } from "@/lib/vision/observation";
-import type { CallUsage, VisionProvider } from "@/lib/vision/provider";
+import type { CallOptions, CallUsage, ObserveInput, ObserveResult, VisionProvider } from "@/lib/vision/provider";
 import type { Claim, ClaimCheck } from "@/lib/vision/verification";
 
 export const usage = (inputTokens: number, outputTokens: number): CallUsage => ({
@@ -62,12 +62,12 @@ export class FakeProvider implements VisionProvider {
       claims.map((c) => ({ id: c.id, confirmed: true, reason: "looks right" })),
   ) {}
 
-  async observe() {
+  async observe(_input?: ObserveInput, _options?: CallOptions): Promise<ObserveResult> {
     this.observeCalls++;
     return { observation: this.observation, usage: usage(10_000, 2_000) };
   }
 
-  async verify(claims: Claim[]) {
+  async verify(claims: Claim[], _options?: CallOptions) {
     this.verifyCalls.push(claims);
     return { results: await this.answer(claims), usage: usage(1_000, 500) };
   }
