@@ -342,3 +342,50 @@ describe("applyVerification", () => {
     expect(applyVerification(declined, [{ object_id: "o1", confirmed: false }])).toBe(declined);
   });
 });
+
+describe("photo request target and last-seen crop", () => {
+  it("not_verifiable seen only in BEFORE asks for an AFTER photo and keeps the last-seen box", () => {
+    const obs = observation([
+      object("o1", "keys", [
+        sighting("before", 1, "visible", { box: SMALL }),
+        sighting("before", 2, "visible", { box: BIG }),
+        sighting("after", 1, "location_occluded", { occluder: "bag" }),
+        sighting("after", 2, "location_out_of_frame"),
+      ]),
+    ]);
+    const v = only(computeReport(obs));
+    expect(v.requested_set).toBe("after");
+    expect(v.last_seen).toEqual({ set: "before", photo: 2, box: BIG });
+  });
+
+  it("not_verifiable seen only in AFTER asks for a BEFORE photo", () => {
+    const obs = observation([
+      object("o1", "plant", [
+        sighting("before", 1, "location_out_of_frame"),
+        sighting("before", 2, "location_out_of_frame"),
+        sighting("after", 1, "visible", { box: BIG }),
+        sighting("after", 2, "visible", { box: SMALL }),
+      ]),
+    ]);
+    const v = only(computeReport(obs));
+    expect(v.requested_set).toBe("before");
+    expect(v.last_seen).toEqual({ set: "after", photo: 1, box: BIG });
+  });
+
+  it("uncertain asks for an AFTER photo; changes and unchanged ask for nothing", () => {
+    const r = ok(
+      computeReport(
+        observation([
+          object("o1", "pen", visibleEverywhere, { match_confidence: 0.2 }),
+          object("o2", "mug", visibleEverywhere, { position_changed: "yes" }),
+          object("o3", "book", visibleEverywhere),
+        ]),
+      ),
+    );
+    expect(r.uncertain[0]).toMatchObject({ requested_set: "after", last_seen: null });
+    expect(r.changes[0]).toMatchObject({ requested_set: null, last_seen: null });
+    expect(r.unchanged[0]).toMatchObject({ requested_set: null, last_seen: null });
+    const down = ok(applyVerification(computeReport(observation([object("o2", "mug", visibleEverywhere, { position_changed: "yes" })])), [{ object_id: "o2", confirmed: false }]));
+    expect(down.uncertain[0].requested_set).toBe("after");
+  });
+});

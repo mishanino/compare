@@ -31,7 +31,13 @@ export interface ObjectVerdict {
   evidence: Evidence | null;
   /** Set for not_verifiable and uncertain, null otherwise. */
   requested_angle: string | null;
+  /** Which set the requested photo belongs to; null when no photo is requested. */
+  requested_set: "before" | "after" | null;
+  /** For not_verifiable: where the object was last seen, as a single crop. */
+  last_seen: (EvidenceCrop & { set: "before" | "after" }) | null;
 }
+
+type CoreVerdict = Omit<ObjectVerdict, "requested_set" | "last_seen">;
 
 export interface SceneNotes {
   lighting_note: string;
@@ -106,7 +112,23 @@ function blockedReason(o: ObservedObject, missingSet: Sighting["set"]): string {
   return `Seen in ${seenIn} photos, but its location is not visible in any ${missingSet.toUpperCase()} photo (${parts.join("; ")}).`;
 }
 
+/** Adds the photo request target and, for not_verifiable, the last-seen crop. */
 export function judgeObject(obs: Observation, o: ObservedObject): ObjectVerdict {
+  const core = judgeCore(obs, o);
+  const visibleBefore = o.sightings.some((s) => s.set === "before" && s.status === "visible");
+  const visibleAfter = o.sightings.some((s) => s.set === "after" && s.status === "visible");
+  if (core.verdict === "uncertain") return { ...core, requested_set: "after", last_seen: null };
+  if (core.verdict !== "not_verifiable") return { ...core, requested_set: null, last_seen: null };
+  const seenSet = visibleBefore && !visibleAfter ? "before" : visibleAfter && !visibleBefore ? "after" : null;
+  const seen = seenSet ? bestSighting(o.sightings, seenSet, "visible") : undefined;
+  return {
+    ...core,
+    requested_set: seenSet === "after" ? "before" : "after",
+    last_seen: seen && seenSet ? { set: seenSet, photo: seen.photo, box: seen.box } : null,
+  };
+}
+
+function judgeCore(obs: Observation, o: ObservedObject): CoreVerdict {
   const base = { object_id: o.id, label: o.label };
   const visibleBefore = o.sightings.some((s) => s.set === "before" && s.status === "visible");
   const visibleAfter = o.sightings.some((s) => s.set === "after" && s.status === "visible");
@@ -255,6 +277,8 @@ export function applyVerification(report: Report, results: VerificationResult[])
           ? `Looked ${v.verdict}, but this could not be double-checked${r.note ? ` (${r.note})` : ""}, so it is not reported as a change.`
           : `Looked ${v.verdict}, but a closer check of the crops did not confirm it${r.note ? `: ${r.note}` : "."}`,
       requested_angle: `Take a closer AFTER photo of the ${v.label}${ref}.`,
+      requested_set: "after",
+      last_seen: null,
     };
   });
   return group(updated, report.notes);

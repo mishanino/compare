@@ -3,7 +3,7 @@
  * -> evidence crops -> verify (1 model call on the claimed changes) -> report.
  */
 import { randomUUID } from "node:crypto";
-import { cropEvidence, toDataUrl, type CropPair } from "./evidence";
+import { cropEvidence, cropRegion, toDataUrl, type Crop, type CropPair } from "./evidence";
 import { preprocessImage, PreprocessError, type PreprocessedImage, type SourceFormat } from "./preprocess";
 import { appendRunLog, toLoggedCall, totalCost, type LoggedCall, type Prices, type RunLogEntry } from "./runlog";
 import type { PhotoSet, UploadedPhoto } from "./upload";
@@ -21,17 +21,25 @@ export interface PhotoInfo {
 
 export interface CompareResult {
   report: Report;
-  /** Evidence crops as JPEG data URLs, keyed by object id. */
-  crops: Record<string, { before: string; after: string }>;
+  /**
+   * Evidence crops as JPEG data URLs, keyed by object id. Pairs for verdicts with
+   * evidence; a single side for not_verifiable objects (where they were last seen).
+   */
+  crops: Record<string, { before?: string; after?: string }>;
   photos: Record<PhotoSet, PhotoInfo[]>;
   run: { id: string; model_id: string; wall_ms: number; cost_usd: number | null };
 }
+
+/** User-facing progress stages: preprocess, observe, then verdict + crops + verify. */
+export type PipelineStage = "prepare" | "observe" | "check";
 
 export interface PipelineDeps {
   /** Created lazily, after the photos are known to be readable. */
   getProvider: () => Promise<VisionProvider>;
   prices: Prices | null;
   logPath?: string;
+  /** Called when a user-facing stage starts. */
+  onStage?: (stage: PipelineStage) => void;
 }
 
 /** The vision call itself failed (network, quota, invalid output twice). */
@@ -115,10 +123,12 @@ export async function runCompare(photos: Record<PhotoSet, UploadedPhoto[]>, deps
   };
 
   try {
+    deps.onStage?.("prepare");
     const images = await timed("preprocess", () => preprocessAll(photos));
     provider = await deps.getProvider();
     const p = provider;
 
+    deps.onStage?.("observe");
     const observed = await timed("observe", async () => {
       try {
         const r = await p.observe({ before: images.before.map((i) => i.model), after: images.after.map((i) => i.model) });
@@ -130,13 +140,17 @@ export async function runCompare(photos: Record<PhotoSet, UploadedPhoto[]>, deps
       }
     });
 
+    deps.onStage?.("check");
     report = await timed("verdict", () => computeReport(observed.observation));
 
     const full = { before: images.before.map((i) => i.full), after: images.after.map((i) => i.full) };
     const pairs = new Map<string, CropPair>();
+    const lastSeen = new Map<string, { set: PhotoSet; crop: Crop }>();
     await timed("evidence", async () => {
       for (const v of allVerdicts(report!)) {
         if (v.evidence) pairs.set(v.object_id, await cropEvidence(full, v.evidence));
+        const img = v.last_seen ? full[v.last_seen.set][v.last_seen.photo - 1] : undefined;
+        if (v.last_seen && img) lastSeen.set(v.object_id, { set: v.last_seen.set, crop: await cropRegion(img, v.last_seen.box) });
       }
     });
 
@@ -182,6 +196,8 @@ export async function runCompare(photos: Record<PhotoSet, UploadedPhoto[]>, deps
     for (const v of allVerdicts(report)) {
       const pair = pairs.get(v.object_id);
       if (pair) crops[v.object_id] = { before: toDataUrl(pair.before.jpeg), after: toDataUrl(pair.after.jpeg) };
+      const seen = lastSeen.get(v.object_id);
+      if (!pair && seen) crops[v.object_id] = { [seen.set]: toDataUrl(seen.crop.jpeg) };
     }
 
     return {

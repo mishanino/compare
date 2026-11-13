@@ -47,12 +47,25 @@ describe("runCompare", () => {
     expect(r.report.changes.map((v) => v.object_id)).toEqual(["o1", "o2"]);
     expect(r.report.unchanged.map((v) => v.object_id)).toEqual(["o3"]);
     expect(r.report.not_verifiable.map((v) => v.object_id)).toEqual(["o4"]);
-    // Crops for every verdict with evidence; none for not_verifiable.
-    expect(Object.keys(r.crops).sort()).toEqual(["o1", "o2", "o3"]);
+    // Pairs for every verdict with evidence; a single last-seen crop for not_verifiable.
+    expect(Object.keys(r.crops).sort()).toEqual(["o1", "o2", "o3", "o4"]);
+    expect(r.crops.o4.before).toMatch(/^data:image\/jpeg;base64,/);
+    expect(r.crops.o4.after).toBeUndefined();
     expect(r.crops.o1.before).toMatch(/^data:image\/jpeg;base64,/);
     expect(r.photos.before[0]).toMatchObject({ photo: 1, name: "before.jpg", full: { width: 400, height: 300 } });
     // 11000 input tokens * $1/M + 2500 output tokens * $10/M
     expect(r.run.cost_usd).toBeCloseTo(0.011 + 0.025);
+  });
+
+  it("reports stages in order", async () => {
+    const stages: string[] = [];
+    await runCompare(await photos(), {
+      getProvider: async () => new FakeProvider(sceneObservation()),
+      prices,
+      logPath,
+      onStage: (s) => stages.push(s),
+    });
+    expect(stages).toEqual(["prepare", "observe", "check"]);
   });
 
   it("downgrades claims the verify step does not confirm", async () => {
