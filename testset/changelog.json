@@ -1,5 +1,5 @@
 {
-  "_status": "DRAFT written from a visual reading of the photos, before any model run. Owner must verify every line against what was physically done, then rename to changelog.json and commit BEFORE the first run.",
+  "_status": "Dev pairs P01-P09 checked against the photos on 2026-11-13 (by Claude, at the owner's request): see photo_check notes; items with small measured moves accept unchanged, moved or uncertain. Holdout pairs P10-P12 were not looked at and still need the owner's check.",
   "_vocabulary": ["moved", "added", "removed", "unchanged", "not_verifiable", "uncertain", "decline"],
   "_excluded": {
     "20261113_122710.jpg": "7 objects on a different layout, over the 5-object limit. Not used for scoring. Optional stress case only."
@@ -48,7 +48,7 @@
       "layout": "A1 layout plus a tall book standing on its edge in front of the cup",
       "files": ["20261113_144531.jpg", "20261113_144541.jpg"],
       "views": "144531 top-down (cup visible above the book), 144541 low front view (cup hidden behind the book)",
-      "owner_verify": "In 144531 the cup looks a little closer to the scissors than in A1. Confirm whether it was touched."
+      "photo_check": "Confirmed: in 144531 the cup is closer to the scissors than in A1 (scissors at 0.491 of the tape-cup span vs 0.438; pairs without movement differ by <= 0.011). E and H were set up again in a second session (14:45-14:49, A1 at 12:42); measured on photo 1: 14 sits at the bottom of the earcups instead of their middle, and the cup is closer to the scissors, by a few cm. A small move is real, so moved and uncertain are accepted."
     },
     "E": {
       "scene": "desk",
@@ -104,9 +104,9 @@
         { "object": "cup", "verdict": "unchanged" },
         { "object": "scissors", "verdict": "unchanged" },
         { "object": "tape", "verdict": "unchanged" },
-        { "object": "headphones", "verdict": "unchanged" }
+        { "object": "headphones", "allowed": ["unchanged", "moved", "uncertain"], "photo_check": "In C and D the left earcup is turned outward (white logo visible), unlike A1 and B: the headphones were nudged when 14 was placed. Scored leniently." }
       ],
-      "owner_verify": "Confirm the headphones were not nudged when 14 was placed next to them."
+      "photo_check": "Checked: the headphones were nudged (left earcup turned, logo visible in D). Tape, scissors and cup did not move (scissors at 0.427-0.434 of the tape-cup span vs 0.435-0.438 in A1)."
     },
     {
       "id": "P04",
@@ -118,7 +118,7 @@
         { "object": "scissors", "verdict": "moved" },
         { "object": "14", "allowed": ["uncertain", "moved"], "forbidden": ["removed", "unchanged"] },
         { "object": "tape", "verdict": "unchanged" },
-        { "object": "headphones", "verdict": "unchanged" }
+        { "object": "headphones", "allowed": ["unchanged", "moved", "uncertain"], "photo_check": "In C and D the left earcup is turned outward (white logo visible), unlike A1 and B: the headphones were nudged when 14 was placed. Scored leniently." }
       ]
     },
     {
@@ -128,10 +128,10 @@
       "purpose": "unmoved objects under hard light, 14 ambiguity",
       "expected": [
         { "object": "14", "allowed": ["uncertain", "moved"], "forbidden": ["removed", "unchanged"] },
-        { "object": "cup", "verdict": "unchanged" },
+        { "object": "cup", "allowed": ["unchanged", "moved", "uncertain"], "photo_check": "The cup sits further right in all three C photos: 0.488 / 0.484 / 0.509 of the tape-scissors span vs 0.417 / 0.423 / 0.439 in B (about 3 cm; pairs without movement differ by <= 0.011)." },
         { "object": "scissors", "verdict": "unchanged" },
         { "object": "tape", "verdict": "unchanged" },
-        { "object": "headphones", "verdict": "unchanged" }
+        { "object": "headphones", "allowed": ["unchanged", "moved", "uncertain"], "photo_check": "In C and D the left earcup is turned outward (white logo visible), unlike A1 and B: the headphones were nudged when 14 was placed. Scored leniently." }
       ]
     },
     {
@@ -144,9 +144,9 @@
         { "object": "book", "verdict": "added" },
         { "object": "cup", "allowed": ["not_verifiable", "uncertain"], "forbidden": ["removed"] },
         { "object": "scissors", "verdict": "unchanged" },
-        { "object": "14", "verdict": "unchanged" },
+        { "object": "14", "allowed": ["unchanged", "moved", "uncertain"], "photo_check": "E and H were set up again in a second session (14:45-14:49, A1 at 12:42); measured on photo 1: 14 sits at the bottom of the earcups instead of their middle, and the cup is closer to the scissors, by a few cm. A small move is real, so moved and uncertain are accepted." },
         { "object": "tape", "verdict": "unchanged" },
-        { "object": "headphones", "verdict": "unchanged" }
+        { "object": "headphones", "allowed": ["unchanged", "moved", "uncertain"], "photo_check": "14 or the headphones moved between sessions (see 14)." }
       ],
       "clarification_round": "Add 20261113_144531.jpg (top-down). The model should have asked for a top or side view of the cup area."
     },
@@ -158,11 +158,11 @@
       "purpose": "same as P06 after the extra angle",
       "expected": [
         { "object": "book", "verdict": "added" },
-        { "object": "cup", "verdict": "unchanged", "owner_verify": "Becomes moved if the cup was touched." },
+        { "object": "cup", "allowed": ["unchanged", "moved", "uncertain"], "photo_check": "E and H were set up again in a second session (14:45-14:49, A1 at 12:42); measured on photo 1: 14 sits at the bottom of the earcups instead of their middle, and the cup is closer to the scissors, by a few cm. A small move is real, so moved and uncertain are accepted." },
         { "object": "scissors", "verdict": "unchanged" },
-        { "object": "14", "verdict": "unchanged" },
+        { "object": "14", "allowed": ["unchanged", "moved", "uncertain"], "photo_check": "E and H were set up again in a second session (14:45-14:49, A1 at 12:42); measured on photo 1: 14 sits at the bottom of the earcups instead of their middle, and the cup is closer to the scissors, by a few cm. A small move is real, so moved and uncertain are accepted." },
         { "object": "tape", "verdict": "unchanged" },
-        { "object": "headphones", "verdict": "unchanged" }
+        { "object": "headphones", "allowed": ["unchanged", "moved", "uncertain"], "photo_check": "14 or the headphones moved between sessions (see 14)." }
       ]
     },
     {
@@ -172,10 +172,10 @@
       "purpose": "removal with the old location visible and empty",
       "expected": [
         { "object": "tape", "verdict": "removed" },
-        { "object": "14", "verdict": "unchanged" },
-        { "object": "headphones", "verdict": "unchanged" },
-        { "object": "scissors", "verdict": "unchanged" },
-        { "object": "cup", "verdict": "unchanged" }
+        { "object": "14", "allowed": ["unchanged", "moved", "uncertain"], "photo_check": "E and H were set up again in a second session (14:45-14:49, A1 at 12:42); measured on photo 1: 14 sits at the bottom of the earcups instead of their middle, and the cup is closer to the scissors, by a few cm. A small move is real, so moved and uncertain are accepted." },
+        { "object": "headphones", "allowed": ["unchanged", "moved", "uncertain"], "photo_check": "14 or the headphones moved between sessions (see 14)." },
+        { "object": "scissors", "allowed": ["unchanged", "moved", "uncertain"], "photo_check": "Without the tape in E the scissors-cup gap cannot tell which of the two moved; it is shorter than in A1 (2.3 vs 2.9 cup widths)." },
+        { "object": "cup", "allowed": ["unchanged", "moved", "uncertain"], "photo_check": "E and H were set up again in a second session (14:45-14:49, A1 at 12:42); measured on photo 1: 14 sits at the bottom of the earcups instead of their middle, and the cup is closer to the scissors, by a few cm. A small move is real, so moved and uncertain are accepted." }
       ]
     },
     {
@@ -185,10 +185,10 @@
       "purpose": "addition (reverse of P08)",
       "expected": [
         { "object": "tape", "verdict": "added" },
-        { "object": "14", "verdict": "unchanged" },
-        { "object": "headphones", "verdict": "unchanged" },
-        { "object": "scissors", "verdict": "unchanged" },
-        { "object": "cup", "verdict": "unchanged" }
+        { "object": "14", "allowed": ["unchanged", "moved", "uncertain"], "photo_check": "E and H were set up again in a second session (14:45-14:49, A1 at 12:42); measured on photo 1: 14 sits at the bottom of the earcups instead of their middle, and the cup is closer to the scissors, by a few cm. A small move is real, so moved and uncertain are accepted." },
+        { "object": "headphones", "allowed": ["unchanged", "moved", "uncertain"], "photo_check": "14 or the headphones moved between sessions (see 14)." },
+        { "object": "scissors", "allowed": ["unchanged", "moved", "uncertain"], "photo_check": "Without the tape in E the scissors-cup gap cannot tell which of the two moved; it is shorter than in A1 (2.3 vs 2.9 cup widths)." },
+        { "object": "cup", "allowed": ["unchanged", "moved", "uncertain"], "photo_check": "E and H were set up again in a second session (14:45-14:49, A1 at 12:42); measured on photo 1: 14 sits at the bottom of the earcups instead of their middle, and the cup is closer to the scissors, by a few cm. A small move is real, so moved and uncertain are accepted." }
       ]
     },
     {

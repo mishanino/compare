@@ -14,7 +14,7 @@
 import { existsSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { median, scoreRun, type GtItem, type PairSpec, type RunScore } from "../lib/eval/score";
+import { median, SCENE_SYNONYMS, scoreRun, SYNONYMS, type GtItem, type PairSpec, type RunScore } from "../lib/eval/score";
 import { runCompare, type CompareResult } from "../lib/pipeline";
 import { pricesForModel } from "../lib/runlog";
 import type { UploadedPhoto } from "../lib/upload";
@@ -24,7 +24,7 @@ const ROOT = path.resolve(__dirname, "..");
 const TESTSET = path.join(ROOT, "testset");
 
 interface Changelog {
-  states: Record<string, { files: string[] }>;
+  states: Record<string, { files: string[]; scene?: string }>;
   pairs: (PairSpec & { before: string; after: string; after_photos?: string[]; holdout?: boolean; expected: GtItem[] })[];
 }
 
@@ -205,7 +205,8 @@ async function main() {
               prices,
               tag: { source: "eval", pair: p.id, model, run: String(run), stamp },
             });
-            const score = scoreRun(p, result.report);
+            const scene = changelog.states[p.before].scene;
+            const score = scoreRun(p, result.report, (scene && SCENE_SYNONYMS[scene]) || SYNONYMS);
             console.log(`${model} ${p.id} #${run}: ${result.report.status} tp=${score.tp} fp=${score.fp} miss=${score.miss} ${((Date.now() - t0) / 1000).toFixed(1)}s`);
             return { pair: p.id, model, run, result, score };
           } catch (err) {

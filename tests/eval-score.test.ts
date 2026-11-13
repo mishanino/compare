@@ -96,3 +96,12 @@ describe("median", () => {
     expect(median([])).toBeNaN();
   });
 });
+
+describe("scene synonyms", () => {
+  it("maps pink labels to 14 only with the desk synonyms", async () => {
+    const { SCENE_SYNONYMS } = await import("@/lib/eval/score");
+    expect(matchLabel("pink block", SCENE_SYNONYMS.desk)).toBe("14");
+    expect(matchLabel("pink block")).toBeNull();
+    expect(matchLabel("pink block", SCENE_SYNONYMS.red_mat)).toBeNull();
+  });
+});
