@@ -46,6 +46,8 @@ export interface RunLogEntry {
   /** Null when prices are not configured. */
   cost_usd: number | null;
   counts?: Record<string, number>;
+  /** Free-form labels, e.g. { source: "eval", pair: "P02", run: "1" }. */
+  tag?: Record<string, string>;
 }
 
 export function toLoggedCall(stage: LoggedCall["stage"], u: CallUsage, error?: string): LoggedCall {
@@ -77,4 +79,22 @@ export async function appendRunLog(entry: RunLogEntry, file = process.env.RUN_LO
   } catch (err) {
     console.error("Could not write run log:", err);
   }
+}
+
+/** Env suffix for a model id: "gemini-3.5-flash-lite" -> "GEMINI_3_5_FLASH_LITE". */
+export const modelEnvSuffix = (modelId: string) => modelId.toUpperCase().replace(/[^A-Z0-9]+/g, "_");
+
+/**
+ * Prices for a given model, from env only. Uses PRICE_*_PER_MTOK_USD__<MODEL> when
+ * set; the plain PRICE_* values only apply to the configured GEMINI_MODEL_ID.
+ * Returns null when nothing is configured for that model, so no cost is invented.
+ */
+export function pricesForModel(modelId: string, env: Record<string, string | undefined> = process.env): Prices | null {
+  const suffix = modelEnvSuffix(modelId);
+  const specific = pricesFromEnv({
+    PRICE_INPUT_PER_MTOK_USD: env[`PRICE_INPUT_PER_MTOK_USD__${suffix}`],
+    PRICE_OUTPUT_PER_MTOK_USD: env[`PRICE_OUTPUT_PER_MTOK_USD__${suffix}`],
+  });
+  if (specific) return specific;
+  return env.GEMINI_MODEL_ID?.trim() === modelId ? pricesFromEnv(env) : null;
 }

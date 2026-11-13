@@ -42,6 +42,8 @@ export interface PipelineDeps {
   logPath?: string;
   /** Called when a user-facing stage starts. */
   onStage?: (stage: PipelineStage) => void;
+  /** Copied into the run log entry. */
+  tag?: Record<string, string>;
 }
 
 /** The vision call itself failed (network, quota, invalid output twice). */
@@ -273,6 +275,7 @@ export async function runCompare(photos: Record<PhotoSet, UploadedPhoto[]>, deps
       prices: deps.prices,
       cost_usd: totalCost(calls, deps.prices),
       ...(report && !failure ? { counts: counts(report) } : {}),
+      ...(deps.tag ? { tag: deps.tag } : {}),
     };
     await appendRunLog(entry, deps.logPath);
   }
